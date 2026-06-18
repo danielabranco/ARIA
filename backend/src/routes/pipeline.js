@@ -3,6 +3,7 @@ const fetch = require('node-fetch');
 const { driver } = require('../lib/neo4j');
 const { httpsAgent } = require('../lib/https-agent');
 const { auditLog } = require('../lib/audit');
+const { enforceGetOnly } = require('../lib/glpi'); // SECURITY: all GLPI calls are GET-only
 
 // ── STAGE DEFINITIONS ────────────────────────────────────────────────────────
 // Mirrors the IT Governance Cockpit sync pipeline.
@@ -41,6 +42,7 @@ const glpiHeaders = (sessionToken, appToken) => ({
 });
 
 const glpiFetch = async (baseUrl, endpoint, sessionToken, appToken) => {
+  enforceGetOnly('GET');
   const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
   const r = await fetch(`${baseUrl}/apirest.php/${endpoint}`, {
     method: 'GET',
@@ -54,6 +56,7 @@ const glpiFetch = async (baseUrl, endpoint, sessionToken, appToken) => {
 
 // Paginate through a GLPI list endpoint (GET /SomeType?range=0-999)
 const fetchAllPages = async (baseUrl, endpoint, sessionToken, appToken, pageSize = 999) => {
+  enforceGetOnly('GET');
   const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
   const all = [];
   let offset = 0;
@@ -76,6 +79,7 @@ const fetchAllPages = async (baseUrl, endpoint, sessionToken, appToken, pageSize
 
 // Paginate through a GLPI search endpoint (returns { data, totalcount })
 const fetchSearchPages = async (baseUrl, searchEndpoint, sessionToken, appToken, pageSize = 999) => {
+  enforceGetOnly('GET');
   const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
   const all = [];
   let offset = 0;
@@ -117,6 +121,7 @@ const setMeta = async (s, stageId, patch) => {
 
 async function runSessionAuth(ctx) {
   const { baseUrl, userToken, appToken } = ctx;
+  enforceGetOnly('GET');
   const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
   const r = await fetch(`${baseUrl}/apirest.php/initSession`, {
     method: 'GET',
@@ -467,6 +472,7 @@ async function runChangeRecords(ctx) {
 
 const killSession = async (baseUrl, sessionToken, appToken) => {
   try {
+    enforceGetOnly('GET');
     const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
     await fetch(`${baseUrl}/apirest.php/killSession`, {
       method: 'GET',
