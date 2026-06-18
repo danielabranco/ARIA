@@ -2243,20 +2243,17 @@ const ArchitectureMap = ({ api }) => {
 
 // ── GLPI SYNC ────────────────────────────────────────────
 const GLPISync = ({ api }) => {
-  const [status, setStatus]     = useState(null);
-  const [running, setRunning]   = useState(false);
+  const [status, setStatus]       = useState(null);
+  const [running, setRunning]     = useState(false);
   const [activeRun, setActiveRun] = useState(null);
-  const [force, setForce]       = useState(false);
-  const [runError, setRunError] = useState(null);
+  const [force, setForce]         = useState(false);
+  const [runError, setRunError]   = useState(null);
 
   const cfg          = api.cfg();
   const isConfigured = !!(cfg.glpiUrl && cfg.glpiUserToken && cfg.glpiAppToken);
 
   const loadStatus = async () => {
-    try {
-      const d = await api.get("/api/pipeline/status");
-      setStatus(d);
-    } catch {}
+    try { setStatus(await api.get("/api/pipeline/status")); } catch {}
   };
 
   useEffect(() => { loadStatus(); }, []);
@@ -2277,22 +2274,29 @@ const GLPISync = ({ api }) => {
       if (stageOverride) body.stages = stageOverride;
       else body.tier = tier;
       await api.post("/api/pipeline/run", body);
-    } catch (e) {
-      setRunError(e.message);
-    }
+    } catch (e) { setRunError(e.message); }
     await loadStatus();
     setRunning(false);
     setActiveRun(null);
   };
 
-  const TIER_COLORS  = { live: T.success, hourly: T.warning, nightly: T.purple };
+  const TIER_COLOR   = { live: T.success, hourly: T.warning, nightly: T.purple };
   const STATUS_DOT   = { never_run: T.textDim, ok: T.success, error: T.danger, running: T.warning };
   const STATUS_LABEL = { never_run: "Never run", ok: "Done", error: "Failed", running: "Running…" };
 
+  // Stages grouped by GLPI resource type
+  const GROUPS = [
+    { id: "auth",      label: "Authentication",   icon: "key",     stages: ["session_auth"] },
+    { id: "reference", label: "Reference Data",   icon: "link2",   stages: ["entity_map", "groups_categories"] },
+    { id: "tickets",   label: "Tickets",          icon: "ticket",  stages: ["tickets_incremental", "tickets_full", "followup_analysis", "reopen_detection", "escalation_history", "task_records", "rescore"] },
+    { id: "users",     label: "Users",            icon: "users",   stages: ["user_directory"] },
+    { id: "changes",   label: "Changes",          icon: "refresh", stages: ["change_field_discovery", "change_records"] },
+  ];
+
   const TIERS = [
-    { id: "live",    label: "Run Live",    color: T.success, desc: "Session auth · incremental tickets · followups · tasks · rescore" },
-    { id: "hourly",  label: "Run Hourly",  color: T.warning, desc: "Live + change records" },
-    { id: "nightly", label: "Run Nightly", color: T.purple,  desc: "Hourly + groups/categories · full reconcile · users · reopens · escalations" },
+    { id: "live",    label: "Run Live",    color: T.success },
+    { id: "hourly",  label: "Run Hourly",  color: T.warning },
+    { id: "nightly", label: "Run Nightly", color: T.purple  },
   ];
 
   const STORE = [
@@ -2304,8 +2308,85 @@ const GLPISync = ({ api }) => {
     { k: "groups",    label: "Groups",    color: T.purple  },
   ];
 
-  const stages = status?.stages || [];
-  const store  = status?.store  || {};
+  const stageMap = {};
+  (status?.stages || []).forEach(s => { stageMap[s.id] = s; });
+  const store = status?.store || {};
+
+  // Endpoint badge: GET → green, POST → blue, local → grey
+  const EndpointTag = ({ endpoint }) => {
+    if (!endpoint) return null;
+    const isLocal = endpoint.startsWith("local");
+    const isPost  = endpoint.startsWith("POST");
+    const color   = isLocal ? T.textDim : isPost ? T.accent : T.success;
+    const bg      = isLocal ? T.border  : isPost ? T.accentGlow : T.successGlow;
+    const label   = isLocal ? "LOCAL" : endpoint.split(" ")[0];
+    const path    = isLocal ? "no network call" : endpoint.replace(/^(GET|POST)\s+/, "").split(" ")[0];
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "monospace", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: bg, color, border: `1px solid ${color}30`, whiteSpace: "nowrap" }}>
+        <span style={{ opacity: 0.7 }}>{label}</span>
+        <span style={{ fontWeight: 400, opacity: 0.85 }}>{path}</span>
+      </span>
+    );
+  };
+
+  const StageCard = ({ stage }) => {
+    if (!stage) return null;
+    const tierColor    = TIER_COLOR[stage.tier] || T.textDim;
+    const dotColor     = STATUS_DOT[stage.status] || T.textDim;
+    const isRunning    = running && activeRun !== null;
+    const lastRun      = stage.lastRun ? new Date(stage.lastRun).toLocaleString() : null;
+
+    return (
+      <div style={{
+        display: "flex", alignItems: "flex-start", padding: "12px 16px", gap: 12,
+        borderBottom: `1px solid ${T.border}`,
+        background: stage.status === "error" ? `${T.danger}06` : stage.status === "ok" ? `${T.success}04` : "transparent",
+      }}>
+        {/* Status dot */}
+        <div style={{ paddingTop: 3, flexShrink: 0 }}>
+          <div style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: isRunning ? T.warning : dotColor,
+            boxShadow: (stage.status === "ok" && !isRunning) ? `0 0 6px ${T.success}80` : "none",
+          }} />
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Row 1: label + badges */}
+          <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", marginBottom: 5 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{stage.label}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 20, background: `${tierColor}15`, color: tierColor, border: `1px solid ${tierColor}28` }}>{stage.tier}</span>
+            <EndpointTag endpoint={stage.endpoint} />
+            {stage.count > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 8px", borderRadius: 20, background: T.accentGlow, color: T.accent, border: `1px solid ${T.accent}28` }}>
+                {stage.count.toLocaleString()} records
+              </span>
+            )}
+            {stage.status === "error" && stage.errorMessage && (
+              <span style={{ fontSize: 11, color: T.danger }}>— {stage.errorMessage}</span>
+            )}
+          </div>
+          {/* Row 2: description */}
+          <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.55 }}>{stage.desc}</div>
+          {/* Row 3: last run */}
+          {lastRun && <div style={{ fontSize: 10, color: T.textDim, marginTop: 4 }}>Last run: {lastRun}</div>}
+        </div>
+
+        {/* Right: status + run */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: isRunning ? T.warning : dotColor }}>
+            {isRunning ? "Running…" : (STATUS_LABEL[stage.status] || stage.status)}
+          </span>
+          <Btn size="sm" variant="secondary"
+            onClick={() => runPipeline("live", [stage.id])}
+            disabled={running || !isConfigured || stage.id === "session_auth"}>
+            Run
+          </Btn>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -2336,104 +2417,80 @@ const GLPISync = ({ api }) => {
       )}
 
       {runError && (
-        <div style={{ marginBottom: 16, padding: "10px 16px", borderRadius: T.radius, background: T.dangerGlow, border: `1px solid ${T.danger}30`, fontSize: 13, color: T.danger }}>
-          {runError}
-        </div>
+        <div style={{ marginBottom: 16, padding: "10px 16px", borderRadius: T.radius, background: T.dangerGlow, border: `1px solid ${T.danger}30`, fontSize: 13, color: T.danger }}>{runError}</div>
       )}
 
-      {/* Tier run buttons */}
-      <Card style={{ marginBottom: 16, padding: "14px 18px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: T.textMuted }}>Pipeline tier:</span>
-        {TIERS.map(t => (
-          <Btn key={t.id} size="sm" color={t.color} onClick={() => runPipeline(t.id)} disabled={running || !isConfigured} title={t.desc}>
-            {running && activeRun === t.id ? "Running…" : t.label}
-          </Btn>
-        ))}
-        <span style={{ fontSize: 11, color: T.textDim, marginLeft: "auto" }}>Nightly ⊃ Hourly ⊃ Live</span>
-      </Card>
-
-      {/* Store counts */}
-      {status && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 20 }}>
-          {STORE.map(c => (
-            <Card key={c.k} style={{ padding: "14px 16px", textAlign: "center" }}>
-              <div style={{ fontSize: 22, fontWeight: 800, color: c.color, letterSpacing: "-0.03em" }}>
-                {(store[c.k] || 0).toLocaleString()}
-              </div>
-              <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4 }}>{c.label}</div>
-            </Card>
+      {/* Tier buttons + store counts row */}
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 12, marginBottom: 20, alignItems: "stretch" }}>
+        {/* Tier buttons */}
+        <Card style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>Run pipeline</div>
+          {TIERS.map(t => (
+            <Btn key={t.id} color={t.color} onClick={() => runPipeline(t.id)} disabled={running || !isConfigured}>
+              {running && activeRun === t.id ? "Running…" : t.label}
+            </Btn>
           ))}
-        </div>
-      )}
+          <div style={{ fontSize: 10, color: T.textDim, marginTop: 2 }}>Nightly ⊃ Hourly ⊃ Live</div>
+        </Card>
 
-      {/* Stage cards */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {stages.length === 0 ? (
-          <Card><EmptyState icon="sync" title="Loading pipeline…" description="Fetching stage metadata from Neo4j." /></Card>
-        ) : stages.map(stage => {
-          const tierColor    = TIER_COLORS[stage.tier] || T.textDim;
-          const dotColor     = STATUS_DOT[stage.status] || T.textDim;
-          const stageRunning = running && activeRun !== null;
-          const lastRun      = stage.lastRun ? new Date(stage.lastRun).toLocaleString() : null;
-
-          return (
-            <Card key={stage.id} style={{
-              padding: 0,
-              border: `1.5px solid ${stage.status === "error" ? T.danger + "40" : stage.status === "ok" ? T.success + "20" : T.border}`,
-            }}>
-              <div style={{ display: "flex", alignItems: "center", padding: "12px 18px", gap: 14 }}>
-                {/* Status dot */}
-                <div style={{
-                  width: 9, height: 9, borderRadius: "50%", flexShrink: 0,
-                  background: stageRunning ? T.warning : dotColor,
-                  boxShadow: (stage.status === "ok" && !stageRunning) ? `0 0 7px ${T.success}70` : "none",
-                }} />
-
-                {/* Label + desc */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{stage.label}</span>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 8px", borderRadius: 20, background: `${tierColor}15`, color: tierColor, border: `1px solid ${tierColor}28` }}>{stage.tier}</span>
-                    {stage.count > 0 && (
-                      <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 9px", borderRadius: 20, background: T.accentGlow, color: T.accent, border: `1px solid ${T.accent}28` }}>
-                        {stage.count.toLocaleString()}
-                      </span>
-                    )}
-                    {stage.status === "error" && stage.errorMessage && (
-                      <span style={{ fontSize: 11, color: T.danger }}>— {stage.errorMessage}</span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.5 }}>{stage.desc}</div>
-                  {lastRun && <div style={{ fontSize: 10, color: T.textDim, marginTop: 3 }}>Last: {lastRun}</div>}
+        {/* Store counts */}
+        <Card style={{ padding: "14px 18px" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 12 }}>Knowledge store</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            {STORE.map(c => (
+              <div key={c.k} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color: c.color, letterSpacing: "-0.03em", minWidth: 40 }}>
+                  {(store[c.k] || 0).toLocaleString()}
                 </div>
-
-                {/* Status label + run button */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: stageRunning ? T.warning : dotColor, minWidth: 60, textAlign: "right" }}>
-                    {stageRunning ? "Running…" : (STATUS_LABEL[stage.status] || stage.status)}
-                  </span>
-                  <Btn size="sm" variant="secondary"
-                    onClick={() => runPipeline("live", [stage.id])}
-                    disabled={running || !isConfigured || stage.id === "session_auth"}>
-                    Run
-                  </Btn>
-                </div>
+                <div style={{ fontSize: 11, color: T.textMuted }}>{c.label}</div>
               </div>
-            </Card>
-          );
-        })}
+            ))}
+          </div>
+        </Card>
       </div>
 
+      {/* Grouped stage sections */}
+      {status && Object.keys(stageMap).length === 0 ? (
+        <Card><EmptyState icon="sync" title="Loading pipeline…" description="Fetching stage metadata from Neo4j." /></Card>
+      ) : GROUPS.map(group => {
+        const groupStages = group.stages.map(id => stageMap[id]).filter(Boolean);
+        if (groupStages.length === 0 && status) return null;
+
+        return (
+          <div key={group.id} style={{ marginBottom: 16 }}>
+            {/* Group header */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, paddingLeft: 2 }}>
+              <Icon name={group.icon} size={13} color={T.textMuted} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: "0.07em" }}>{group.label}</span>
+              <div style={{ flex: 1, height: 1, background: T.border, marginLeft: 4 }} />
+            </div>
+
+            {/* Stage cards inside group */}
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              {groupStages.length === 0 ? (
+                <div style={{ padding: "16px 18px", fontSize: 12, color: T.textDim }}>Loading…</div>
+              ) : (
+                groupStages.map((stage, i) => (
+                  <div key={stage.id} style={{ borderBottom: i < groupStages.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                    <StageCard stage={stage} />
+                  </div>
+                ))
+              )}
+            </Card>
+          </div>
+        );
+      })}
+
       {/* Info box */}
-      <div style={{ marginTop: 18, padding: "14px 18px", borderRadius: T.radius, background: T.accentGlow, border: `1px solid ${T.accent}28`, fontSize: 12, color: T.textMuted, lineHeight: 1.75 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+      <div style={{ marginTop: 8, padding: "13px 18px", borderRadius: T.radius, background: T.accentGlow, border: `1px solid ${T.accent}28`, fontSize: 12, color: T.textMuted, lineHeight: 1.75 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 5 }}>
           <Icon name="info" size={14} color={T.accent} />
           <span style={{ fontWeight: 600, color: T.accent }}>How it works</span>
         </div>
-        <strong style={{ color: T.text }}>Live</strong> stages run every execution (auth, incremental tickets, followups, tasks, rescore).
+        <strong style={{ color: T.text }}>Live</strong> runs every execution (auth · incremental tickets · followups · tasks · rescore).
         <strong style={{ color: T.text }}> Hourly</strong> adds change records.
-        <strong style={{ color: T.text }}> Nightly</strong> adds full reconciliation, user directory, reopens, and escalation history.
-        Use <strong style={{ color: T.text }}>Force full re-sync</strong> to bypass incremental filters on the next run.
+        <strong style={{ color: T.text }}> Nightly</strong> adds full reconciliation, users, reopens, and escalation history.
+        Use <strong style={{ color: T.text }}>Force full re-sync</strong> to bypass incremental filters.
       </div>
     </div>
   );
