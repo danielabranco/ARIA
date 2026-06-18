@@ -46,6 +46,10 @@ const initSchema = async () => {
     await s.run('CREATE CONSTRAINT ticket_solution_id   IF NOT EXISTS FOR (s:TicketSolution)   REQUIRE s.glpiId IS UNIQUE');
     await s.run('CREATE CONSTRAINT ticket_log_id        IF NOT EXISTS FOR (l:TicketLog)        REQUIRE l.glpiId IS UNIQUE');
     await s.run('CREATE CONSTRAINT ticket_task_id       IF NOT EXISTS FOR (t:TicketTask)       REQUIRE t.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT release_id           IF NOT EXISTS FOR (r:Release)           REQUIRE r.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT change_validation_id IF NOT EXISTS FOR (v:ChangeValidation)  REQUIRE v.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT ticket_validation_id IF NOT EXISTS FOR (v:TicketValidation)  REQUIRE v.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT knowledge_base_id    IF NOT EXISTS FOR (k:KnowledgeBase)     REQUIRE k.glpiId IS UNIQUE');
     // Additional indexes for frequent search fields
     await s.run('CREATE INDEX application_name IF NOT EXISTS FOR (a:Application) ON (a.name)');
     await s.run('CREATE INDEX dataflow_name    IF NOT EXISTS FOR (d:Dataflow)    ON (d.name)');

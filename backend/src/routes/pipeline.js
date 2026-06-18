@@ -22,7 +22,18 @@ const STAGES = [
   { id: 'task_records',         label: 'Task Records',           tier: 'live',    desc: 'Fetch ticket task records for open tickets — incremental (only re-fetches tickets whose last_update changed)', endpoint: 'GET /TicketTask {paginated}' },
   { id: 'rescore',              label: 'Re-score',               tier: 'live',    desc: 'Compute risk scores from raw data using current weight config',                                                endpoint: 'local — no network call' },
   { id: 'change_field_discovery', label: 'Change Field Discovery', tier: 'nightly', desc: 'Discover plugin field IDs (runs once, cached in meta table)',                                               endpoint: 'GET /listSearchOptions/Change' },
-  { id: 'change_records',       label: 'Change Records',         tier: 'hourly',  desc: 'Fetch Change records — incremental after first run (only re-fetches records modified since last sync, full on first run or force flag trigger)', endpoint: 'GET /search/Change {2yr window}' },
+  { id: 'change_records',            label: 'Change Records',              tier: 'hourly',  desc: 'Fetch Change records — incremental after first run (only re-fetches records modified since last sync, full on first run or force flag trigger)',   endpoint: 'GET /search/Change {2yr window}' },
+  { id: 'release_records',           label: 'Release Records',             tier: 'hourly',  desc: 'Fetch GLPI release objects and sub-documents',                                                                                                         endpoint: 'GET /PluginReleaseRelease' },
+  { id: 'ticket_change_links',       label: 'Ticket-Change Links',         tier: 'hourly',  desc: 'Resolve ticket↔change links for active changes',                                                                                                       endpoint: 'GET /Change/{id}/Change_Ticket {active changes only}' },
+  { id: 'cab_validations',           label: 'CAB Validations',             tier: 'hourly',  desc: 'Fetch change-approval records for active changes',                                                                                                      endpoint: 'GET /Change/{id}/ChangeValidation {active changes only}' },
+  { id: 'ticket_validations',        label: 'Ticket Validations',          tier: 'hourly',  desc: 'Fetch all pending ticket validations (status=2)',                                                                                                       endpoint: 'GET /TicketValidation {status=2, all pending}' },
+  { id: 'release_history',           label: 'Release History',             tier: 'nightly', desc: 'Fetch change logs for active changes (release traceability)',                                                                                           endpoint: 'GET /Change/{id}/log {active changes only}' },
+  { id: 'followup_history_tickets',  label: 'Followup History (Tickets)',  tier: 'live',    desc: 'Incremental followup history for open tickets',                                                                                                         endpoint: 'GET /Ticket/{id}/ITILFollowup {open tickets, incremental}' },
+  { id: 'followup_history_changes',  label: 'Followup History (Changes)',  tier: 'live',    desc: 'Fetch followup history for all change records (incremental)',                                                                                           endpoint: 'GET /Change/{id}/ITILFollowup {incremental}' },
+  { id: 'solution_history',          label: 'Solution History',            tier: 'live',    desc: 'Incremental solution records for all tickets',                                                                                                          endpoint: 'GET /Ticket/{id}/ITILSolution {incremental}' },
+  { id: 'validation_history',        label: 'Validation History',          tier: 'live',    desc: 'Fetch ticket and change validation records incrementally',                                                                                              endpoint: 'GET /Ticket/{id}/TicketValidation + Change/{id}/ChangeValidation {incremental}' },
+  { id: 'field_change_history',      label: 'Field Change History',        tier: 'live',    desc: 'Fetch field-level change logs for open tickets (incremental)',                                                                                          endpoint: 'GET /Ticket/{id}/log {open tickets, incremental}' },
+  { id: 'knowledge_base_cache',      label: 'Knowledge Base Cache',        tier: 'live',    desc: 'Paginate and cache all GLPI knowledge base articles',                                                                                                   endpoint: 'GET /KnowledgeBase {paginated}' },
 ];
 
 const TIER_ORDER = { live: 0, hourly: 1, nightly: 2, weekly: 3 };
@@ -468,6 +479,306 @@ async function runChangeRecords(ctx) {
   return { count, incremental: !!lastSync };
 }
 
+async function runReleaseRecords(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const releases = await fetchAllPages(baseUrl, 'PluginReleaseRelease?expand_dropdowns=true', sessionToken, appToken);
+  let count = 0;
+  for (const r of releases) {
+    await s.run(
+      `MERGE (r:Release { glpiId: $id }) SET r.name = $name, r.status = $status, r.date = $date, r.updatedAt = $now`,
+      { id: String(r.id), name: r.name || '', status: String(r.status || ''), date: r.date || '', now: new Date().toISOString() }
+    );
+    count++;
+  }
+  return { count };
+}
+
+async function runTicketChangeLinks(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const changeRes = await s.run(`MATCH (c:Change) WHERE c.status IN ['1','2','3','4'] RETURN c.glpiId AS id LIMIT 200`);
+  const changeIds = changeRes.records.map(r => r.get('id'));
+  let count = 0;
+  const BATCH = 20;
+  for (let i = 0; i < changeIds.length; i += BATCH) {
+    const batch = changeIds.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (cid) => {
+      try {
+        const links = await fetchAllPages(baseUrl, `Change/${cid}/Change_Ticket?expand_dropdowns=true`, sessionToken, appToken);
+        for (const link of links) {
+          const tid = String(link.tickets_id || link['2'] || '');
+          if (!tid) continue;
+          await s.run(
+            `MATCH (c:Change { glpiId: $cid }), (t:Ticket { glpiId: $tid }) MERGE (c)-[:LINKED_TICKET]->(t)`,
+            { cid: String(cid), tid }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  return { count, changesProcessed: changeIds.length };
+}
+
+async function runCabValidations(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const changeRes = await s.run(`MATCH (c:Change) WHERE c.status IN ['1','2','3','4'] RETURN c.glpiId AS id LIMIT 200`);
+  const changeIds = changeRes.records.map(r => r.get('id'));
+  let count = 0;
+  const BATCH = 20;
+  for (let i = 0; i < changeIds.length; i += BATCH) {
+    const batch = changeIds.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (cid) => {
+      try {
+        const validations = await fetchAllPages(baseUrl, `Change/${cid}/ChangeValidation?expand_dropdowns=true`, sessionToken, appToken);
+        for (const v of validations) {
+          await s.run(
+            `MERGE (cv:ChangeValidation { glpiId: $id })
+             SET cv.changeId = $changeId, cv.status = $status, cv.userId = $userId,
+                 cv.date = $date, cv.comment = $comment, cv.updatedAt = $now
+             WITH cv MATCH (c:Change { glpiId: $changeId })
+             MERGE (c)-[:HAS_VALIDATION]->(cv)`,
+            {
+              id: String(v.id), changeId: String(cid), status: String(v.status || ''),
+              userId: String(v.users_id || ''), date: v.date || '',
+              comment: (v.comment || '').substring(0, 500), now: new Date().toISOString()
+            }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  return { count, changesProcessed: changeIds.length };
+}
+
+async function runTicketValidations(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const validations = await fetchAllPages(baseUrl, 'TicketValidation?expand_dropdowns=true', sessionToken, appToken);
+  let count = 0;
+  for (const v of validations) {
+    const ticketId = String(v.tickets_id || '');
+    if (!ticketId) continue;
+    await s.run(
+      `MERGE (tv:TicketValidation { glpiId: $id })
+       SET tv.ticketId = $ticketId, tv.status = $status, tv.userId = $userId,
+           tv.date = $date, tv.comment = $comment, tv.updatedAt = $now
+       WITH tv MATCH (t:Ticket { glpiId: $ticketId })
+       MERGE (t)-[:HAS_VALIDATION]->(tv)`,
+      {
+        id: String(v.id), ticketId, status: String(v.status || ''),
+        userId: String(v.users_id || ''), date: v.date || '',
+        comment: (v.comment || '').substring(0, 500), now: new Date().toISOString()
+      }
+    );
+    count++;
+  }
+  return { count };
+}
+
+async function runReleaseHistory(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const changeRes = await s.run(`MATCH (c:Change) WHERE c.status IN ['1','2','3','4'] RETURN c.glpiId AS id LIMIT 200`);
+  const changeIds = changeRes.records.map(r => r.get('id'));
+  let count = 0;
+  const BATCH = 20;
+  for (let i = 0; i < changeIds.length; i += BATCH) {
+    const batch = changeIds.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (cid) => {
+      try {
+        const logs = await fetchAllPages(baseUrl, `Change/${cid}/Log?expand_dropdowns=true`, sessionToken, appToken);
+        count += logs.length;
+      } catch {}
+    }));
+  }
+  return { count, changesProcessed: changeIds.length };
+}
+
+async function runFollowupHistoryTickets(ctx) {
+  const { baseUrl, sessionToken, appToken, s, ticketIds, meta, force } = ctx;
+  const ids = ticketIds?.open || [];
+  const lastSyncMs = !force && meta.followup_history_tickets?.lastSuccessAt
+    ? new Date(meta.followup_history_tickets.lastSuccessAt).getTime()
+    : 0;
+  const BATCH = 50;
+  let count = 0;
+  const toProcess = ids.slice(0, 2000);
+  for (let i = 0; i < toProcess.length; i += BATCH) {
+    const batch = toProcess.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (tid) => {
+      try {
+        const followups = await fetchAllPages(baseUrl, `Ticket/${tid}/ITILFollowup?expand_dropdowns=true`, sessionToken, appToken);
+        for (const f of followups) {
+          if (lastSyncMs && new Date(f.date_mod || f.date || 0).getTime() < lastSyncMs) continue;
+          await s.run(
+            `MERGE (fh:Followup { glpiId: $id })
+             SET fh.ticketId = $ticketId, fh.date = $date, fh.content = $content,
+                 fh.authorType = $authorType, fh.userId = $userId, fh.updatedAt = $now
+             WITH fh MATCH (t:Ticket { glpiId: $ticketId })
+             MERGE (t)-[:HAS_FOLLOWUP]->(fh)`,
+            {
+              id: String(f.id), ticketId: String(tid), date: f.date || '',
+              content: (f.content || '').substring(0, 500),
+              authorType: String(f.requesttypes_id || 'unknown'),
+              userId: String(f.users_id || ''), now: new Date().toISOString()
+            }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  return { count, ticketsProcessed: toProcess.length };
+}
+
+async function runFollowupHistoryChanges(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const changeRes = await s.run(`MATCH (c:Change) RETURN c.glpiId AS id LIMIT 500`);
+  const changeIds = changeRes.records.map(r => r.get('id'));
+  let count = 0;
+  const BATCH = 30;
+  for (let i = 0; i < changeIds.length; i += BATCH) {
+    const batch = changeIds.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (cid) => {
+      try {
+        const followups = await fetchAllPages(baseUrl, `Change/${cid}/ITILFollowup?expand_dropdowns=true`, sessionToken, appToken);
+        count += followups.length;
+      } catch {}
+    }));
+  }
+  return { count, changesProcessed: changeIds.length };
+}
+
+async function runSolutionHistory(ctx) {
+  const { baseUrl, sessionToken, appToken, s, ticketIds, meta, force } = ctx;
+  const ids = ticketIds?.all || [];
+  const lastSyncMs = !force && meta.solution_history?.lastSuccessAt
+    ? new Date(meta.solution_history.lastSuccessAt).getTime()
+    : 0;
+  const BATCH = 30;
+  let count = 0;
+  const toProcess = ids.slice(0, 1000);
+  for (let i = 0; i < toProcess.length; i += BATCH) {
+    const batch = toProcess.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (tid) => {
+      try {
+        const solutions = await fetchAllPages(baseUrl, `Ticket/${tid}/ITILSolution?expand_dropdowns=true`, sessionToken, appToken);
+        for (const sol of solutions) {
+          if (lastSyncMs && new Date(sol.date_mod || sol.date || 0).getTime() < lastSyncMs) continue;
+          await s.run(
+            `MERGE (sol:TicketSolution { glpiId: $id })
+             SET sol.ticketId = $ticketId, sol.count = $solCount, sol.date = $date, sol.updatedAt = $now
+             WITH sol MATCH (t:Ticket { glpiId: $ticketId })
+             MERGE (t)-[:HAS_SOLUTION]->(sol)`,
+            {
+              id: String(sol.id || `${tid}_sol`), ticketId: String(tid),
+              solCount: solutions.length, date: sol.date || '', now: new Date().toISOString()
+            }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  return { count, ticketsProcessed: toProcess.length };
+}
+
+async function runValidationHistory(ctx) {
+  const { baseUrl, sessionToken, appToken, s, ticketIds } = ctx;
+  const tids = (ticketIds?.all || []).slice(0, 1000);
+  let count = 0;
+  const BATCH = 30;
+  for (let i = 0; i < tids.length; i += BATCH) {
+    const batch = tids.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (tid) => {
+      try {
+        const validations = await fetchAllPages(baseUrl, `Ticket/${tid}/TicketValidation?expand_dropdowns=true`, sessionToken, appToken);
+        for (const v of validations) {
+          await s.run(
+            `MERGE (tv:TicketValidation { glpiId: $id })
+             SET tv.ticketId = $ticketId, tv.status = $status, tv.userId = $userId,
+                 tv.date = $date, tv.updatedAt = $now
+             WITH tv MATCH (t:Ticket { glpiId: $ticketId })
+             MERGE (t)-[:HAS_VALIDATION]->(tv)`,
+            {
+              id: String(v.id), ticketId: String(tid), status: String(v.status || ''),
+              userId: String(v.users_id || ''), date: v.date || '', now: new Date().toISOString()
+            }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  // Also pull change validations
+  const changeRes = await s.run(`MATCH (c:Change) RETURN c.glpiId AS id LIMIT 200`);
+  const changeIds = changeRes.records.map(r => r.get('id'));
+  for (let i = 0; i < changeIds.length; i += BATCH) {
+    const batch = changeIds.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (cid) => {
+      try {
+        const validations = await fetchAllPages(baseUrl, `Change/${cid}/ChangeValidation?expand_dropdowns=true`, sessionToken, appToken);
+        count += validations.length;
+      } catch {}
+    }));
+  }
+  return { count };
+}
+
+async function runFieldChangeHistory(ctx) {
+  const { baseUrl, sessionToken, appToken, s, ticketIds, meta, force } = ctx;
+  const ids = ticketIds?.open || [];
+  const lastSyncMs = !force && meta.field_change_history?.lastSuccessAt
+    ? new Date(meta.field_change_history.lastSuccessAt).getTime()
+    : 0;
+  const BATCH = 30;
+  let count = 0;
+  const toProcess = ids.slice(0, 1000);
+  for (let i = 0; i < toProcess.length; i += BATCH) {
+    const batch = toProcess.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (tid) => {
+      try {
+        const logs = await fetchAllPages(baseUrl, `Ticket/${tid}/Log?expand_dropdowns=true`, sessionToken, appToken);
+        for (const log of logs) {
+          if (lastSyncMs && new Date(log.date_mod || 0).getTime() < lastSyncMs) continue;
+          await s.run(
+            `MERGE (l:TicketLog { glpiId: $id })
+             SET l.ticketId = $ticketId, l.date = $date, l.field = $field,
+                 l.oldValue = $oldValue, l.newValue = $newValue, l.updatedAt = $now
+             WITH l MATCH (t:Ticket { glpiId: $ticketId })
+             MERGE (t)-[:HAS_LOG]->(l)`,
+            {
+              id: String(log.id), ticketId: String(tid), date: log.date_mod || '',
+              field: String(log.field || ''), oldValue: String(log.old_value || ''),
+              newValue: String(log.new_value || ''), now: new Date().toISOString()
+            }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  return { count, ticketsProcessed: toProcess.length };
+}
+
+async function runKnowledgeBaseCache(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const items = await fetchAllPages(baseUrl, 'KnowledgeBase?expand_dropdowns=true', sessionToken, appToken);
+  let count = 0;
+  for (const item of items) {
+    await s.run(
+      `MERGE (kb:KnowledgeBase { glpiId: $id })
+       SET kb.name = $name, kb.content = $content, kb.category = $category, kb.updatedAt = $now`,
+      {
+        id: String(item.id), name: item.name || '',
+        content: (item.answer || item.content || '').substring(0, 1000),
+        category: String(item.knowbaseitemcategories_id || ''), now: new Date().toISOString()
+      }
+    );
+    count++;
+  }
+  return { count };
+}
+
 // ── KILL SESSION ──────────────────────────────────────────────────────────────
 
 const killSession = async (baseUrl, sessionToken, appToken) => {
@@ -530,8 +841,19 @@ const RUNNERS = {
   escalation_history:    runEscalationHistory,
   task_records:          runTaskRecords,
   rescore:               runRescore,
-  change_field_discovery: runChangeFieldDiscovery,
-  change_records:        runChangeRecords,
+  change_field_discovery:    runChangeFieldDiscovery,
+  change_records:            runChangeRecords,
+  release_records:           runReleaseRecords,
+  ticket_change_links:       runTicketChangeLinks,
+  cab_validations:           runCabValidations,
+  ticket_validations:        runTicketValidations,
+  release_history:           runReleaseHistory,
+  followup_history_tickets:  runFollowupHistoryTickets,
+  followup_history_changes:  runFollowupHistoryChanges,
+  solution_history:          runSolutionHistory,
+  validation_history:        runValidationHistory,
+  field_change_history:      runFieldChangeHistory,
+  knowledge_base_cache:      runKnowledgeBaseCache,
 };
 
 // ── ENDPOINTS ─────────────────────────────────────────────────────────────────
@@ -581,7 +903,9 @@ router.get('/status', async (req, res) => {
       ...def,
       status:        stagesMeta[def.id]?.status        || 'never_run',
       lastRun:       stagesMeta[def.id]?.lastRun       || null,
+      lastRunEnd:    stagesMeta[def.id]?.lastRunEnd     || null,
       lastSuccessAt: stagesMeta[def.id]?.lastSuccessAt || null,
+      duration:      stagesMeta[def.id]?.duration      || null,
       count:         Number(stagesMeta[def.id]?.count) || 0,
       errorMessage:  stagesMeta[def.id]?.errorMessage  || '',
     }));
@@ -669,23 +993,26 @@ router.post('/run', async (req, res) => {
     const runner = RUNNERS[stageDef.id];
     if (!runner) return;
     const now = new Date().toISOString();
+    const startMs = Date.now();
     await setMeta(s, stageDef.id, { status: 'running', lastRun: now });
     try {
       const result = await runner(ctx);
+      const endMs = Date.now();
+      const lastRunEnd = new Date(endMs).toISOString();
+      const duration = String(((endMs - startMs) / 1000).toFixed(2));
       results[stageDef.id] = result;
       await setMeta(s, stageDef.id, {
-        status: 'success',
-        lastRun: now,
-        lastSuccessAt: now,
-        count: result?.count ?? 0,
-        errorMessage: '',
+        status: 'success', lastRun: now, lastRunEnd, lastSuccessAt: now,
+        count: result?.count ?? 0, duration, errorMessage: '',
       });
-      // Refresh meta for subsequent stages
       ctx.meta[stageDef.id] = { ...(ctx.meta[stageDef.id] || {}), lastSuccessAt: now };
     } catch (e) {
+      const endMs = Date.now();
+      const lastRunEnd = new Date(endMs).toISOString();
+      const duration = String(((endMs - startMs) / 1000).toFixed(2));
       errors[stageDef.id] = e.message;
       results[stageDef.id] = { error: e.message };
-      await setMeta(s, stageDef.id, { status: 'error', lastRun: now, errorMessage: e.message });
+      await setMeta(s, stageDef.id, { status: 'error', lastRun: now, lastRunEnd, duration, errorMessage: e.message });
     }
   };
 
