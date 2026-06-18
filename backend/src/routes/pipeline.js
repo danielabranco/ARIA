@@ -552,7 +552,7 @@ router.get('/status', async (req, res) => {
     }
 
     // Store counts
-    const [tickets, followups, solutions, logs, tasks, users, groups, cats] = await Promise.all([
+    const [tickets, followups, solutions, logs, tasks, users, groups, cats, changes] = await Promise.all([
       s.run('MATCH (t:Ticket) RETURN count(t) AS c'),
       s.run('MATCH (f:Followup) RETURN count(f) AS c'),
       s.run('MATCH (s:TicketSolution) RETURN count(s) AS c'),
@@ -561,6 +561,7 @@ router.get('/status', async (req, res) => {
       s.run('MATCH (u:User) RETURN count(u) AS c'),
       s.run('MATCH (g:Group) RETURN count(g) AS c'),
       s.run('MATCH (c:ITILCategory) RETURN count(c) AS c'),
+      s.run('MATCH (c:Change) RETURN count(c) AS c'),
     ]);
 
     const store = {
@@ -572,6 +573,7 @@ router.get('/status', async (req, res) => {
       users:      users.records[0]?.get('c').toNumber()     || 0,
       groups:     groups.records[0]?.get('c').toNumber()    || 0,
       categories: cats.records[0]?.get('c').toNumber()      || 0,
+      changes:    changes.records[0]?.get('c').toNumber()   || 0,
     };
 
     // Merge stage defs with metadata
