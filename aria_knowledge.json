@@ -1,0 +1,42 @@
+[
+  {
+    "category": "Dataflow Standards",
+    "topic": "Dataflow Definition and Purpose",
+    "content": "Source: IT.WI.019/R03 - Dataflows (OM Digital Solutions GmbH). Effective: 2025-10-03. Approved by Adriano Silvano, Reviewed by Rita Silva, Edited by Daniela Branco.\n\nA dataflow refers to how data is collected, processed, and exchanged between internal and external systems. It shows the transfer of information (sometimes also material) from one part of the system to another.\n\nNAMING CONVENTION: [SOURCE SYSTEM]-[DESTINATION SYSTEM] Brief description. Example: [MAGENTO]-[MULESOFT] Customer Create.\n\nAll fields marked with * are MANDATORY in GLPI dataflow entries."
+  },
+  {
+    "category": "Dataflow Standards",
+    "topic": "Dataflow Mandatory Fields: Name, GDPR Label, Status",
+    "content": "Source: IT.WI.019/R03\n\nMANDATORY FIELDS:\n- Name: Format [SOURCE]-[DESTINATION] Description\n- GDPR Label:\n  Level 1 - Customer Confidential Data: Directly identifiable data (names, addresses, email, phone numbers)\n  Level 2 - Indirect Customer Identification: Indirectly identifiable (IP addresses, device identifiers)\n  Level 3 - Nonidentifiable/Anonymous Data\n- Status:\n  Active: online and running\n  Devel: in development\n  Removed: deleted\n  Stopped: not flowing but not removed, may resume in future\n- Associable to a ticket: Yes or No"
+  },
+  {
+    "category": "Dataflow Standards",
+    "topic": "Dataflow Fields: Description and Flow Group",
+    "content": "Source: IT.WI.019/R03\n\nSHORT DESCRIPTION: Usually same as name; add more detail if the data passing needs clarification.\n\nLONG DESCRIPTION: Optional extended description of the dataflow.\n\nFLOW GROUP:\n- Data Processing: Data exchanged between systems database-to-database\n- EDI Processing: Internal processes changing information in other systems via flow of information (e.g. ticket creation using Talend)\n- External EDI: Dataflows managed by external parties"
+  },
+  {
+    "category": "Dataflow Standards",
+    "topic": "Dataflow Transfer Protocols",
+    "content": "Source: IT.WI.019/R03 - Transfer Protocol is a MANDATORY field.\n\nAvailable protocols:\n- AS2: Secure EDI transmission over internet using encryption and digital signatures\n- EDI Connectivity: Standardized electronic business document exchange between organizations\n- ETL Transfer: Extract-Transform-Load; data integration for warehousing and analytics\n- Flat File: Plain text file, records per line, fields delimited by comma/tab/pipe\n- FTP: File Transfer Protocol over TCP/IP network\n- JSON: Lightweight data interchange format between server and web app\n- SAP Extractor: Extracts data from SAP systems for reporting/analytics/integration (part of SAP BI)\n- SQL: Structured Query Language for relational database CRUD operations\n- VPN: Encrypted private tunnel over public network\n- Web Service: Standardized app-to-app communication over internet using open protocols\n- WSDL/SOAP: Structured info exchange as web services over HTTP/HTTPS; enterprise-grade\n- XML: Markup language for hierarchical human- and machine-readable data"
+  },
+  {
+    "category": "Dataflow Standards",
+    "topic": "Dataflow Characteristics: Mode, Pattern, Type, Indicator",
+    "content": "Source: IT.WI.019/R03\n\nSTATUS START DATE: Date the dataflow was first built and put in place.\n\nMODE:\n- Delta Transfer: Partial replication using filters or conditions\n- Full Transfer: Entire structure pulled with no constraints\n\nPATTERN:\n- Fire and Forget: Sender transmits without expecting acknowledgment\n- Guaranteed Delivery: Delivery ensured even if initial transmission fails\n- Request-Reply Asynchronous: Reply expected but sender does not block or wait\n- Request-Reply Synchronous: Sender waits for immediate response before proceeding\n\nTYPE (complexity):\n- High Complexity: Many components, interactions, and dependencies\n- Medium Complexity: Moderate challenge and interactivity\n- Low Complexity: Simple, few variables, minimal effort or skills required\n\nINDICATOR (documentation status):\n- Good Documentation: Comprehensive, well-organized, up-to-date materials\n- No Documentation: Absence of any written materials\n- Partial Documentation: Incomplete or fragmented materials covering only some aspects"
+  },
+  {
+    "category": "Dataflow Standards",
+    "topic": "Dataflow Authentication Types and Data Structure",
+    "content": "Source: IT.WI.019/R03\n\nSOURCE AND DESTINATION AUTHENTICATION TYPE:\n- API Key Authentication: Unique identifiers shared between source and destination to authorize data transfers\n- Basic Authentication: Username and password encoded in base64 sent with each request\n- LDAP/Active Directory Authentication: Centralized directory service authentication (e.g. Microsoft Active Directory)\n\nSOURCE AND DESTINATION DATA STRUCTURE:\nField exists to document the data structure at both the source and destination ends of the dataflow."
+  },
+  {
+    "category": "Dataflow Standards",
+    "topic": "Dataflow Operational Characteristics: Triggers and Frequency",
+    "content": "Source: IT.WI.019/R03\n\nTRANSFER TRIGGERS:\n- Manual Triggers: User manually initiates transfer\n- Scheduled Triggers (Time-Based): Predefined times such as hourly, daily, or weekly\n- Event-Based Triggers: Specific events or changes in the system\n- API Call Triggers: External system makes API request to GLPI or plugin\n- Webhook Triggers: HTTP callbacks pushed in real-time on specific events\n- File-Based Triggers: File added/modified/detected in local or cloud directory\n- Real-Time Streaming Triggers: Continuous transfer as data is generated\n- User Action Triggers: Specific user actions within the system\n- Conditional Logic Triggers: Conditions met based on logical rules (if this then that)\n\nTRANSFER FREQUENCY:\n- Real-Time: Immediately as data is available or changes occur\n- Daily: Once per day\n- Weekly: One day per week at set time\n- On Demand (Ad-Hoc): Only when explicitly requested by user or system\n- Batch Processing: Large batches during non-peak hours\n- Event-Driven: When a specific event occurs regardless of time or schedule"
+  },
+  {
+    "category": "Dataflow Standards",
+    "topic": "Dataflow Error Handling, Priority and Contacts",
+    "content": "Source: IT.WI.019/R03\n\nTRANSFER ERROR HANDLING:\n- Logging and Monitoring: All operations must be logged with errors recorded in detail for debugging and auditing\n- Alerting and Notifications: Email sent to admins or users when transfer fails (e.g. bibu.support@om-digitalsolutions.com)\n\nPRIORITY:\n- High-Priority: Most critical transfers; processed immediately when error occurs\n- Medium-Priority: Must happen within a timeframe but can tolerate some delay\n- Low-Priority: Non-urgent; processed during off-peak times; delays do not impact business\n\nDOCUMENTATION LINKS:\n- URL to Functional Doc (mapping etc.)\n- URL to Technical Doc (design etc.)\n\nCONTACTS:\n- Dataflow Group: Responsible for management, control, and approving any changes\n- Dataflow Expert: User expert in the dataflow (can access or modify specific data)\n- External Partner: External party responsible when Flow Group is External EDI; or external support for internal EDI/data processing\n- Dataflow Support: Backup group if applicable"
+  }
+]

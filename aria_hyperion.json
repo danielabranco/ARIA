@@ -1,0 +1,12 @@
+[
+  {
+    "category": "application",
+    "topic": "Hyperion - Application Profile",
+    "content": "Source: GLPI App Structure ID 852. Fetched: 2026-06-01.\n\nNAME: Hyperion (Oracle Hyperion Financial Management)\nGLPI ID: 852\nPARENT SYSTEM: SAP ERP EMEA\nTYPE: Cloud PaaS\nSTATUS: In Use\nINSTANCES: QA + Prod\nTARGET: Strategic\nUSERS: Internal\nLICENSE METRIC: Daily\nSUPPLIER: The Hackett Group\nSERVICE LEVEL: SLA Non-ERP\nCOMPONENT OWNER: OMDS IT > OMDG > ITSM\nASSOCIABLE TO TICKET: Yes\nTICKETS LINKED: 12\nIMPACT ANALYSIS ENTRIES: 2\nGLPI URL: https://de1vs076.om-digitalsolutions.com/marketplace/archisw/front/swcomponent.form.php?id=852"
+  },
+  {
+    "category": "dataflow",
+    "topic": "[FINANCEDATASTORE]-[HYPERION] Reports feed",
+    "content": "Source: GLPI Dataflows. Fetched: 2026-06-01.\n\nNAME: [FINANCEDATASTORE]-[HYPERION] Reports feed\nFLOW GROUP: Integration Hub\nSTATUS: Active\nFROM APPLICATION: SAP ERP EMEA\nTO APPLICATION: Hyperion\nEXTERNAL PARTNER: The Hackett Group\nASSOCIABLE TO TICKET: Yes\nPROCESS MANAGER: HFM\nLAST UPDATED: 2025-01-02\n\nDESCRIPTION:\nTwo parallel flows feed data into Hyperion:\n\nHFM (Financial Management):\n- User places file in \\\\de1vs046\\TRANSFER\\HYPERION\\SAPGL_FILE\n- Job collects and transforms file into 16-period files\n- Sends email confirmation after conversion\n- Drops 16 files onto FTP server\n\nPLANNING:\n- Collects data from database\n- Drops files onto FTP server\n- On each run: archives previous files with timestamp\n- Archives older than one month are automatically deleted"
+  }
+]

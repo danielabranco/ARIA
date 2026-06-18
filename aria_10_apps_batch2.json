@@ -1,0 +1,72 @@
+[
+  {
+    "topic": "SAP CRM Service - Application Profile",
+    "category": "application",
+    "glpiId": "798",
+    "reviewStatus": "to_be_reviewed",
+    "content": "SAP CRM Service (GLPI ID: 798) is an OnPremise application managed by OMDS IT > OMDG > SAP ERP, located in Coimbra. Service level: SLA ERP. Short description: CRM systems. It exposes a set of SOAP/RFC service endpoints consumed by IT Tools under the [ITTOOL]-[SAP-SRV] naming convention. GLPI records: 58 tickets, 6 changes.\n\nDataflows (30 total, all inbound from IT Tools, status DEVEL):\nIDs: 223,222,221,219,218,217,216,220,229,230,224,225,226,227,213,214,215,228,231,237,234,235,236,111,77,70,76,71,156,155\nServices include: BP_CHANGE, BP_CREATE, BP_GET, CE_CHANGE, CE_CREATE, CE_GET, CHDOC_GET, DEMO_CE_CREATE, DEMO_CHANGE and related variants. All flows are in DEVEL status, indicating active development/integration work between IT Tools and SAP CRM Service."
+  },
+  {
+    "topic": "PIM Service - Application Profile",
+    "category": "application",
+    "glpiId": "762",
+    "reviewStatus": "to_be_reviewed",
+    "content": "PIM Service (GLPI ID: 762) is an OnPremise application built in .Net with SQLserver database, currently in Production status. Managed by OMDS IT > OMDG > ITSM, located in Coimbra. User: RamalhoJo. GLPI records: 6 tickets.\n\nNo dataflows registered in GLPI. PIM Service appears to be a standalone Product Information Management tool with no formally tracked integrations. May operate via manual data exchange or undocumented connections."
+  },
+  {
+    "topic": "Cancom EDI Services - Application Profile",
+    "category": "application",
+    "glpiId": "817",
+    "reviewStatus": "to_be_reviewed",
+    "content": "Cancom EDI Services (GLPI ID: 817) is a Data Structure type application, child of SAP ERP EMEA. Managed by OMDS IT > OMDG > BI and DevOps. Supplier: CANCOM. Service level: Critical 24x7. Location: Germany. GLPI records: 3 tickets.\n\nDataflows (28 total):\nIDs: 105,92,107,91,94,108,104,81,80,99,18,13,103,98,96,106,102,93,82,83,100,9,12,8,89,90,101,97\n\nKey connections:\n- SAP ERP EMEA -> Cancom EDI Services (IDs: 100,9,12,8,89,90) - 6 outbound from EMEA\n- Cancom EDI Services -> SAP ERP EMEA (IDs: 99,18,13) - 3 inbound to EMEA\n- SAP ByDesign -> Cancom EDI Services (ID: 92) - 1 inbound from ByDesign\n- Cancom EDI Services -> SAP ByDesign (ID: 91) - 1 outbound to ByDesign\n- Additional flows (IDs: 105,107,94,108,104,81,80,103,98,96,106,102,93,82,83,101,97) with blank app names, likely external EDI partners.\n\nCancom EDI Services is the central EDI hub connecting SAP ERP EMEA and SAP ByDesign with external trading partners via EDI protocols."
+  },
+  {
+    "topic": "Easy Archive - Application Profile",
+    "category": "application",
+    "glpiId": "820",
+    "reviewStatus": "to_be_reviewed",
+    "content": "Easy Archive (GLPI ID: 820) is a Cloud PaaS application, child of SAP ERP EMEA. Managed by OMDS IT > OMDG > SAP ERP. Supplier: Easy Software Deutschland GmbH. Service level: SLA ERP. Instance: Production. Targets: Strategic. Users: Confidential.\n\nDataflows (3 total, all inbound from SAP ERP EMEA):\n- ID 114: SAP ERP EMEA -> Easy Archive\n- ID 115: SAP ERP EMEA -> Easy Archive\n- ID 116: SAP ERP EMEA -> Easy Archive\n\nEasy Archive is an SAP-integrated document archiving solution. SAP ERP EMEA pushes documents and records to Easy Archive for long-term storage and compliance. No outbound flows registered."
+  },
+  {
+    "topic": "SAP Concur - Application Profile",
+    "category": "application",
+    "glpiId": "794",
+    "reviewStatus": "to_be_reviewed",
+    "content": "SAP Concur (GLPI ID: 794) is a Cloud PaaS application for travel and expense management. Owner: EMEA Finance Team. Service level: SLA Non-ERP. Targets: Turnaround. Users: Public. GLPI records: 27 tickets.\n\nDataflows (2 total, bidirectional with SAP ERP EMEA):\n- ID 117: SAP Concur -> SAP ERP EMEA (expense/financial data export to ERP)\n- ID 118: SAP ERP EMEA -> SAP Concur (cost center/employee data sync from ERP)\n\nSAP Concur integrates with SAP ERP EMEA for employee master data and financial posting of approved expenses. Owned by Finance, not IT, reflecting its business-user-driven nature."
+  },
+  {
+    "topic": "Report Server - Application Profile",
+    "category": "application",
+    "glpiId": "760",
+    "reviewStatus": "to_be_reviewed",
+    "content": "Report Server (GLPI ID: 760) is a Data Structure type application built in .Net with SQLserver database, in Production. Managed by OMDS IT > OMDG > BI and DevOps, located in Coimbra. Service level: SLA ERP. User: BrancoDa. GLPI records: 109 tickets.\n\nDataflows (1 total):\n- ID 29: BIBU -> Report Server (BIBU pushes data to Report Server)\n\nReport Server serves as the central reporting platform for OMDS. It receives data from BIBU (Business Intelligence and BI Universe) and provides report delivery to end users. High ticket count (109) indicates heavy usage and frequent support activity."
+  },
+  {
+    "topic": "GLPI - Application Profile",
+    "category": "application",
+    "glpiId": "759",
+    "reviewStatus": "to_be_reviewed",
+    "content": "GLPI (GLPI ID: 759) is an OnPremise IT Service Management platform built in PHP with SQLserver database. Managed by OMDS IT > OMDG > ITSM. Supplier: Teclib. Service level: SLA Non-ERP. Location: Coimbra. Targets: Strategic. Users: Internal. GLPI records: 136 tickets, 5 changes.\n\nGLPI is the OMDS ITSM system of record used to track all IT assets, tickets, changes, projects, dataflows, and application structures. It serves as the primary data source for ARIA via the sync integration. No dataflows are registered in GLPI for this application itself, as it operates as the source of truth rather than a consumer of other systems."
+  },
+  {
+    "topic": "Hyperion - Application Profile",
+    "category": "application",
+    "glpiId": "852",
+    "reviewStatus": "to_be_reviewed",
+    "content": "Hyperion (GLPI ID: 852) is a Cloud PaaS financial planning application, child of SAP ERP EMEA. Managed by OMDS IT > OMDG > ITSM. Supplier: The Hackett Group. Service level: SLA Non-ERP. Instances: QA + Production. Targets: Strategic. Users: Internal. GLPI records: 12 tickets.\n\nDataflows (1 total):\n- ID 262: SAP ERP EMEA -> Hyperion (financial actuals data feed from ERP to Hyperion for planning and consolidation)\n\nHyperion is used for financial consolidation and planning. It receives actual financial data from SAP ERP EMEA to support budgeting and reporting cycles. The Hackett Group is the managed service provider."
+  },
+  {
+    "topic": "Paypal - Application Profile",
+    "category": "application",
+    "glpiId": "841",
+    "reviewStatus": "to_be_reviewed",
+    "content": "Paypal (GLPI ID: 841) is a Cloud PaaS payment processing application. Managed by OMDS IT > OMDG > Web Infra. Supplier: Paypal. Service level: SLA ERP. Targets: Factory. GLPI records: 1 ticket.\n\nDataflows (1 total):\n- ID 181: Paypal -> SAP ERP EMEA (payment confirmation and transaction data sent to ERP for financial posting)\n\nPaypal serves as an online payment gateway for OMDS e-commerce transactions. Payment confirmations are forwarded to SAP ERP EMEA for revenue recognition and financial reconciliation. Low ticket count indicates stable operation."
+  },
+  {
+    "topic": "Sprinx CRM - Application Profile",
+    "category": "application",
+    "glpiId": "826",
+    "reviewStatus": "to_be_reviewed",
+    "content": "Sprinx CRM (GLPI ID: 826) is an OnPremise CRM application with Status: Removed. It is a child of Sprinx ECSC CRM Helpdesk. Managed by OMDG CS Supervisors. Targets: Support. GLPI records: 5 tickets.\n\nNo dataflows registered in GLPI.\n\nSprinx CRM has been decommissioned (Status: Removed). It was used by the Customer Service team as a CRM/helpdesk tool, operating under the Sprinx ECSC CRM Helpdesk parent system. No active integrations remain. Retained in GLPI for historical reference."
+  }
+]

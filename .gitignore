@@ -1,0 +1,19 @@
+# Environment — never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build output
+build/
+dist/
+
+# Docker volumes / data
+data/
+
+# OS
+.DS_Store
+Thumbs.db
