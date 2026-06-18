@@ -38,9 +38,19 @@ const initSchema = async () => {
     await s.run('CREATE CONSTRAINT project_id     IF NOT EXISTS FOR (p:Project)     REQUIRE p.glpiId IS UNIQUE');
     await s.run('CREATE CONSTRAINT user_id        IF NOT EXISTS FOR (u:User)        REQUIRE u.glpiId IS UNIQUE');
     await s.run('CREATE CONSTRAINT group_id       IF NOT EXISTS FOR (g:Group)       REQUIRE g.glpiId IS UNIQUE');
+    // Pipeline nodes
+    await s.run('CREATE CONSTRAINT pipeline_meta_stage  IF NOT EXISTS FOR (m:PipelineMeta)    REQUIRE m.stage IS UNIQUE');
+    await s.run('CREATE CONSTRAINT itil_category_id     IF NOT EXISTS FOR (c:ITILCategory)    REQUIRE c.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT entity_id            IF NOT EXISTS FOR (e:Entity)           REQUIRE e.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT followup_id          IF NOT EXISTS FOR (f:Followup)         REQUIRE f.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT ticket_solution_id   IF NOT EXISTS FOR (s:TicketSolution)   REQUIRE s.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT ticket_log_id        IF NOT EXISTS FOR (l:TicketLog)        REQUIRE l.glpiId IS UNIQUE');
+    await s.run('CREATE CONSTRAINT ticket_task_id       IF NOT EXISTS FOR (t:TicketTask)       REQUIRE t.glpiId IS UNIQUE');
     // Additional indexes for frequent search fields
     await s.run('CREATE INDEX application_name IF NOT EXISTS FOR (a:Application) ON (a.name)');
     await s.run('CREATE INDEX dataflow_name    IF NOT EXISTS FOR (d:Dataflow)    ON (d.name)');
+    await s.run('CREATE INDEX ticket_status    IF NOT EXISTS FOR (t:Ticket)      ON (t.status)');
+    await s.run('CREATE INDEX ticket_date_mod  IF NOT EXISTS FOR (t:Ticket)      ON (t.dateMod)');
     console.log('✅ Schema ready');
   } catch (e) { console.log('Schema note:', e.message); }
   finally { await s.close(); }
