@@ -2243,92 +2243,85 @@ const ArchitectureMap = ({ api }) => {
 
 // ── GLPI SYNC ────────────────────────────────────────────
 const GLPISync = ({ api }) => {
-  const [pageSize, setPageSize] = useState(500);
-  const [running, setRunning] = useState(false);
-  const [lastSync, setLastSync] = useState(() => localStorage.getItem("aria_lastSync") || null);
-  const [expanded, setExpanded] = useState({});
+  const [status, setStatus]     = useState(null);
+  const [running, setRunning]   = useState(false);
+  const [activeRun, setActiveRun] = useState(null);
+  const [force, setForce]       = useState(false);
+  const [runError, setRunError] = useState(null);
 
-  const TICKET_STATUSES  = [{v:1,l:"New"},{v:2,l:"Processing"},{v:4,l:"Pending"},{v:5,l:"Solved"},{v:6,l:"Closed"}];
-  const CHANGE_STATUSES  = [{v:1,l:"New"},{v:2,l:"Evaluation"},{v:4,l:"Accepted"},{v:5,l:"In Progress"},{v:7,l:"Qualification"},{v:8,l:"Closed"},{v:9,l:"Refused"}];
+  const cfg          = api.cfg();
+  const isConfigured = !!(cfg.glpiUrl && cfg.glpiUserToken && cfg.glpiAppToken);
 
-  const ENDPOINTS = [
-    { id: "dataflows",  label: "Dataflows",     icon: "flow",    desc: "App-to-app connections — core of the architecture map", color: T.danger,   priority: 1, hasActiveOnly: true, hasDateRange: true },
-    { id: "appstructs", label: "App Structures", icon: "monitor", desc: "All applications and systems in OMDS",                  color: T.accent,   priority: 2, hasActiveOnly: true, hasDateRange: true },
-    { id: "changes",    label: "Changes",        icon: "refresh", desc: "IT change requests",                                   color: T.warning,  priority: 3, hasDateRange: true, hasStatuses: true, statusOptions: CHANGE_STATUSES },
-    { id: "tickets",    label: "Tickets",        icon: "ticket",  desc: "Incidents and service requests",                       color: T.success,  priority: 4, hasDateRange: true, hasStatuses: true, statusOptions: TICKET_STATUSES },
-    { id: "projects",   label: "Projects",       icon: "folder",  desc: "IT projects",                                          color: T.purple,   priority: 5, hasDateRange: true },
-    { id: "users",      label: "Users",          icon: "user",    desc: "GLPI users for ownership mapping",                     color: T.pink,     priority: 6 },
-    { id: "groups",     label: "Groups",         icon: "users",   desc: "GLPI groups for approval routing",                     color: T.teal,     priority: 7 },
+  const loadStatus = async () => {
+    try {
+      const d = await api.get("/api/pipeline/status");
+      setStatus(d);
+    } catch {}
+  };
+
+  useEffect(() => { loadStatus(); }, []);
+
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(loadStatus, 3000);
+    return () => clearInterval(id);
+  }, [running]);
+
+  const runPipeline = async (tier, stageOverride) => {
+    if (!isConfigured) { setRunError("GLPI not configured — go to Settings first"); return; }
+    setRunning(true);
+    setRunError(null);
+    setActiveRun(stageOverride ? stageOverride[0] : tier);
+    try {
+      const body = { glpiUrl: cfg.glpiUrl, userToken: cfg.glpiUserToken, appToken: cfg.glpiAppToken, force };
+      if (stageOverride) body.stages = stageOverride;
+      else body.tier = tier;
+      await api.post("/api/pipeline/run", body);
+    } catch (e) {
+      setRunError(e.message);
+    }
+    await loadStatus();
+    setRunning(false);
+    setActiveRun(null);
+  };
+
+  const TIER_COLORS  = { live: T.success, hourly: T.warning, nightly: T.purple };
+  const STATUS_DOT   = { never_run: T.textDim, ok: T.success, error: T.danger, running: T.warning };
+  const STATUS_LABEL = { never_run: "Never run", ok: "Done", error: "Failed", running: "Running…" };
+
+  const TIERS = [
+    { id: "live",    label: "Run Live",    color: T.success, desc: "Session auth · incremental tickets · followups · tasks · rescore" },
+    { id: "hourly",  label: "Run Hourly",  color: T.warning, desc: "Live + change records" },
+    { id: "nightly", label: "Run Nightly", color: T.purple,  desc: "Hourly + groups/categories · full reconcile · users · reopens · escalations" },
   ];
 
-  const [syncStatuses, setSyncStatuses] = useState(() => {
-    const s = {};
-    ENDPOINTS.forEach(e => { s[e.id] = { state: "idle", count: null, error: null, ts: null }; });
-    return s;
-  });
+  const STORE = [
+    { k: "tickets",   label: "Tickets",   color: T.success },
+    { k: "changes",   label: "Changes",   color: T.warning },
+    { k: "followups", label: "Followups", color: T.accent  },
+    { k: "tasks",     label: "Tasks",     color: T.pink    },
+    { k: "users",     label: "Users",     color: T.teal    },
+    { k: "groups",    label: "Groups",    color: T.purple  },
+  ];
 
-  const [filters, setFilters] = useState(() => {
-    const f = {};
-    ENDPOINTS.forEach(e => { f[e.id] = { activeOnly: true, dateFrom: "", dateTo: "", statuses: [] }; });
-    return f;
-  });
-
-  const setStatus  = (id, upd) => setSyncStatuses(prev => ({ ...prev, [id]: { ...prev[id], ...upd } }));
-  const setFilter  = (id, upd) => setFilters(prev => ({ ...prev, [id]: { ...prev[id], ...upd } }));
-  const toggleExp  = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
-  const toggleStat = (id, v) => setFilters(prev => {
-    const cur = prev[id].statuses;
-    return { ...prev, [id]: { ...prev[id], statuses: cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v] } };
-  });
-
-  const STATE_COLORS = { idle: T.textDim, running: T.warning, success: T.success, error: T.danger };
-  const STATE_LABELS = { idle: "Idle", running: "Syncing…", success: "Done", error: "Failed" };
-
-  const syncType = async (type) => {
-    const cfg = api.cfg();
-    if (!cfg.glpiUrl || !cfg.glpiUserToken || !cfg.glpiAppToken) {
-      setStatus(type, { state: "error", error: "GLPI not configured — go to Settings" });
-      return;
-    }
-    setStatus(type, { state: "running", error: null });
-    try {
-      const f = filters[type];
-      const data = await api.post("/api/sync/glpi", {
-        glpiUrl: cfg.glpiUrl, userToken: cfg.glpiUserToken, appToken: cfg.glpiAppToken,
-        types: [type], pageSize,
-        filters: { [type]: f }
-      });
-      if (data.error) setStatus(type, { state: "error", error: data.error });
-      else setStatus(type, { state: "success", count: data.synced?.[type] || 0, ts: new Date().toLocaleTimeString() });
-    } catch (e) {
-      setStatus(type, { state: "error", error: e.message });
-    }
-  };
-
-  const syncAll = async () => {
-    const cfg = api.cfg();
-    if (!cfg.glpiUrl || !cfg.glpiUserToken || !cfg.glpiAppToken) { alert("GLPI not configured — go to Settings first"); return; }
-    setRunning(true);
-    for (const ep of [...ENDPOINTS].sort((a, b) => a.priority - b.priority)) await syncType(ep.id);
-    const now = new Date().toLocaleString();
-    localStorage.setItem("aria_lastSync", now);
-    setLastSync(now);
-    setRunning(false);
-  };
-
-  const totalSynced = Object.values(syncStatuses).reduce((sum, s) => sum + (s.count || 0), 0);
-  const cfg = api.cfg();
-  const isConfigured = cfg.glpiUrl && cfg.glpiUserToken && cfg.glpiAppToken;
-
-  const inputStyle = { background: T.bgElevated, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 12, padding: "5px 9px", fontFamily: "inherit", outline: "none", width: 130 };
-  const chipStyle  = (active, color) => ({ display: "inline-flex", alignItems: "center", padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: "pointer", border: `1px solid ${active ? color + "60" : T.border}`, background: active ? color + "18" : "transparent", color: active ? color : T.textMuted, userSelect: "none" });
+  const stages = status?.stages || [];
+  const store  = status?.store  || {};
 
   return (
     <div>
       <SectionHeader title="GLPI Sync" subtitle="Pull data from GLPI into ARIA's knowledge graph."
-        actions={<Btn icon={running ? "refresh" : "download"} onClick={syncAll} disabled={running || !isConfigured}>{running ? "Syncing…" : "Sync All"}</Btn>} />
+        actions={
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.textMuted, cursor: "pointer", userSelect: "none" }}>
+              <input type="checkbox" checked={force} onChange={e => setForce(e.target.checked)} style={{ cursor: "pointer" }} />
+              Force full re-sync
+            </label>
+            <Btn size="sm" variant="secondary" icon="refresh" onClick={loadStatus} disabled={running}>Refresh</Btn>
+          </div>
+        }
+      />
 
-      {/* Status banner */}
+      {/* Connection banner */}
       {!isConfigured ? (
         <div style={{ marginBottom: 20, padding: "13px 18px", borderRadius: T.radius, background: T.dangerGlow, border: `1px solid ${T.danger}30`, display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
           <Icon name="warning" size={15} color={T.danger} />
@@ -2339,164 +2332,93 @@ const GLPISync = ({ api }) => {
           <Icon name="check" size={15} color={T.success} />
           <span style={{ fontSize: 13, fontWeight: 600, color: T.success }}>GLPI Connected</span>
           <span style={{ fontSize: 12, color: T.textMuted }}>{cfg.glpiUrl}</span>
-          {lastSync && <span style={{ fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>Last sync: {lastSync}</span>}
-          {totalSynced > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: T.success }}>{totalSynced} records</span>}
         </div>
       )}
 
-      {/* Global options */}
-      <Card style={{ marginBottom: 16, padding: "12px 18px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: T.textMuted }}>Global Options</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ fontSize: 12, color: T.textMuted }}>Max records per sync</label>
-          <DarkSelect value={pageSize} onChange={e => setPageSize(Number(e.target.value))} style={{ padding: "6px 10px" }}>
-            {[100,200,500,1000,2000].map(n => <option key={n} value={n}>{n}</option>)}
-          </DarkSelect>
+      {runError && (
+        <div style={{ marginBottom: 16, padding: "10px 16px", borderRadius: T.radius, background: T.dangerGlow, border: `1px solid ${T.danger}30`, fontSize: 13, color: T.danger }}>
+          {runError}
         </div>
-        <span style={{ fontSize: 11, color: T.textDim, marginLeft: "auto" }}>Use per-card filters for date batching and status filtering</span>
+      )}
+
+      {/* Tier run buttons */}
+      <Card style={{ marginBottom: 16, padding: "14px 18px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: T.textMuted }}>Pipeline tier:</span>
+        {TIERS.map(t => (
+          <Btn key={t.id} size="sm" color={t.color} onClick={() => runPipeline(t.id)} disabled={running || !isConfigured} title={t.desc}>
+            {running && activeRun === t.id ? "Running…" : t.label}
+          </Btn>
+        ))}
+        <span style={{ fontSize: 11, color: T.textDim, marginLeft: "auto" }}>Nightly ⊃ Hourly ⊃ Live</span>
       </Card>
 
-      {/* Endpoint cards */}
+      {/* Store counts */}
+      {status && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 20 }}>
+          {STORE.map(c => (
+            <Card key={c.k} style={{ padding: "14px 16px", textAlign: "center" }}>
+              <div style={{ fontSize: 22, fontWeight: 800, color: c.color, letterSpacing: "-0.03em" }}>
+                {(store[c.k] || 0).toLocaleString()}
+              </div>
+              <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4 }}>{c.label}</div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Stage cards */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {ENDPOINTS.map(ep => {
-          const s = syncStatuses[ep.id];
-          const f = filters[ep.id];
-          const stateColor = STATE_COLORS[s.state];
-          const isOpen = expanded[ep.id];
-          const hasFilters = ep.hasActiveOnly || ep.hasDateRange || ep.hasStatuses;
-          const hasActiveFilter = (ep.hasDateRange && (f.dateFrom || f.dateTo)) || (ep.hasStatuses && f.statuses.length > 0) || (ep.hasActiveOnly && !f.activeOnly);
+        {stages.length === 0 ? (
+          <Card><EmptyState icon="sync" title="Loading pipeline…" description="Fetching stage metadata from Neo4j." /></Card>
+        ) : stages.map(stage => {
+          const tierColor    = TIER_COLORS[stage.tier] || T.textDim;
+          const dotColor     = STATUS_DOT[stage.status] || T.textDim;
+          const stageRunning = running && activeRun !== null;
+          const lastRun      = stage.lastRun ? new Date(stage.lastRun).toLocaleString() : null;
 
           return (
-            <Card key={ep.id} style={{ border: `1.5px solid ${s.state !== "idle" ? stateColor + "40" : hasActiveFilter ? ep.color + "40" : T.border}`, padding: 0 }}>
-              {/* Header row */}
-              <div style={{ display: "flex", alignItems: "center", padding: "14px 18px", gap: 14 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 9, background: `${ep.color}15`, border: `1px solid ${ep.color}25`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Icon name={ep.icon} size={16} color={ep.color} />
-                </div>
+            <Card key={stage.id} style={{
+              padding: 0,
+              border: `1.5px solid ${stage.status === "error" ? T.danger + "40" : stage.status === "ok" ? T.success + "20" : T.border}`,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", padding: "12px 18px", gap: 14 }}>
+                {/* Status dot */}
+                <div style={{
+                  width: 9, height: 9, borderRadius: "50%", flexShrink: 0,
+                  background: stageRunning ? T.warning : dotColor,
+                  boxShadow: (stage.status === "ok" && !stageRunning) ? `0 0 7px ${T.success}70` : "none",
+                }} />
+
+                {/* Label + desc */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{ep.label}</span>
-                    {s.count !== null && (
-                      <span style={{ fontSize: 11, fontWeight: 600, background: `${ep.color}18`, color: ep.color, borderRadius: 20, padding: "1px 9px", border: `1px solid ${ep.color}28` }}>
-                        {s.count} synced
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{stage.label}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 8px", borderRadius: 20, background: `${tierColor}15`, color: tierColor, border: `1px solid ${tierColor}28` }}>{stage.tier}</span>
+                    {stage.count > 0 && (
+                      <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 9px", borderRadius: 20, background: T.accentGlow, color: T.accent, border: `1px solid ${T.accent}28` }}>
+                        {stage.count.toLocaleString()}
                       </span>
                     )}
-                    {s.ts && <span style={{ fontSize: 11, color: T.textDim }}>at {s.ts}</span>}
-                    {hasActiveFilter && <span style={{ fontSize: 10, fontWeight: 600, background: ep.color + "18", color: ep.color, borderRadius: 20, padding: "1px 8px", border: `1px solid ${ep.color}28` }}>Filters active</span>}
+                    {stage.status === "error" && stage.errorMessage && (
+                      <span style={{ fontSize: 11, color: T.danger }}>— {stage.errorMessage}</span>
+                    )}
                   </div>
-                  <div style={{ fontSize: 12, color: T.textMuted, marginTop: 2 }}>{ep.desc}</div>
-                  {s.error && <div style={{ fontSize: 11, color: T.danger, marginTop: 4 }}>{s.error}</div>}
+                  <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.5 }}>{stage.desc}</div>
+                  {lastRun && <div style={{ fontSize: 10, color: T.textDim, marginTop: 3 }}>Last: {lastRun}</div>}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {hasFilters && (
-                    <button onClick={() => toggleExp(ep.id)} style={{ background: "transparent", border: `1px solid ${T.border}`, borderRadius: 6, color: T.textMuted, fontSize: 11, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>
-                      {isOpen ? "Hide filters" : "Filters"}
-                    </button>
-                  )}
-                  <span style={{ fontSize: 12, fontWeight: 600, color: stateColor, minWidth: 56, textAlign: "right" }}>{STATE_LABELS[s.state]}</span>
-                  <Btn size="sm" onClick={() => syncType(ep.id)} disabled={running || !isConfigured} color={ep.color}>
-                    {s.state === "running" ? "…" : "Sync"}
+
+                {/* Status label + run button */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: stageRunning ? T.warning : dotColor, minWidth: 60, textAlign: "right" }}>
+                    {stageRunning ? "Running…" : (STATUS_LABEL[stage.status] || stage.status)}
+                  </span>
+                  <Btn size="sm" variant="secondary"
+                    onClick={() => runPipeline("live", [stage.id])}
+                    disabled={running || !isConfigured || stage.id === "session_auth"}>
+                    Run
                   </Btn>
                 </div>
               </div>
-
-              {/* Expandable filter panel */}
-              {isOpen && hasFilters && (
-                <div style={{ borderTop: `1px solid ${T.border}`, padding: "14px 18px", background: T.bgElevated, display: "flex", flexDirection: "column", gap: 12 }}>
-
-                  {/* Active only toggle (dataflows / appstructs) */}
-                  {ep.hasActiveOnly && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 12, color: T.textMuted, minWidth: 90 }}>Status filter</span>
-                      <span onClick={() => setFilter(ep.id, { activeOnly: true })}  style={chipStyle(f.activeOnly,  ep.color)}>Active only</span>
-                      <span onClick={() => setFilter(ep.id, { activeOnly: false })} style={chipStyle(!f.activeOnly, ep.color)}>All statuses</span>
-                    </div>
-                  )}
-
-                  {/* Status checkboxes (tickets / changes) */}
-                  {ep.hasStatuses && ep.statusOptions && (
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 12, color: T.textMuted, minWidth: 90, paddingTop: 3 }}>Statuses</span>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                        <span onClick={() => setFilter(ep.id, { statuses: [] })} style={chipStyle(f.statuses.length === 0, ep.color)}>All</span>
-                        {ep.statusOptions.map(opt => (
-                          <span key={opt.v} onClick={() => toggleStat(ep.id, opt.v)} style={chipStyle(f.statuses.includes(opt.v), ep.color)}>{opt.l}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Date range — year + quarter picker */}
-                  {ep.hasDateRange && (() => {
-                    const currentYear = new Date().getFullYear();
-                    const years = Array.from({ length: currentYear - 2017 }, (_, i) => 2018 + i).reverse();
-                    const ybtn = (active) => ({
-                      background: T.bgElevated, borderRadius: 20, padding: "3px 11px",
-                      fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-                      border: `1px solid ${active ? ep.color + "60" : T.border}`,
-                      color: active ? ep.color : T.textMuted,
-                    });
-                    // Detect if current selection is exactly a full year
-                    const fullYearMatch = f.dateFrom && f.dateTo &&
-                      f.dateFrom === `${f.dateFrom.slice(0,4)}-01-01` &&
-                      f.dateTo   === `${f.dateTo.slice(0,4)}-12-31`   &&
-                      f.dateFrom.slice(0,4) === f.dateTo.slice(0,4);
-                    const selYear = fullYearMatch ? f.dateFrom.slice(0,4) : null;
-                    const quarters = selYear ? [
-                      { l: "Q1", f: `${selYear}-01-01`, t: `${selYear}-03-31` },
-                      { l: "Q2", f: `${selYear}-04-01`, t: `${selYear}-06-30` },
-                      { l: "Q3", f: `${selYear}-07-01`, t: `${selYear}-09-30` },
-                      { l: "Q4", f: `${selYear}-10-01`, t: `${selYear}-12-31` },
-                    ] : [];
-
-                    return (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-
-                        {/* Year row */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 12, color: T.textMuted, minWidth: 90 }}>Year</span>
-                          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                            {years.map(y => {
-                              const yf = `${y}-01-01`, yt = `${y}-12-31`;
-                              const active = f.dateFrom === yf && f.dateTo === yt;
-                              return (
-                                <button key={y} onClick={() => setFilter(ep.id, { dateFrom: yf, dateTo: yt })} style={ybtn(active)}>{y}</button>
-                              );
-                            })}
-                            {(f.dateFrom || f.dateTo) && (
-                              <button onClick={() => setFilter(ep.id, { dateFrom: "", dateTo: "" })} style={{ ...ybtn(false), color: T.danger, borderColor: T.danger + "40" }}>✕ Clear</button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Quarter row — only visible when a full year is selected */}
-                        {selYear && (
-                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <span style={{ fontSize: 12, color: T.textMuted, minWidth: 90 }}>Quarter</span>
-                            <div style={{ display: "flex", gap: 5 }}>
-                              <button onClick={() => setFilter(ep.id, { dateFrom: `${selYear}-01-01`, dateTo: `${selYear}-12-31` })} style={ybtn(f.dateFrom === `${selYear}-01-01` && f.dateTo === `${selYear}-12-31`)}>All {selYear}</button>
-                              {quarters.map(q => {
-                                const active = f.dateFrom === q.f && f.dateTo === q.t;
-                                return <button key={q.l} onClick={() => setFilter(ep.id, { dateFrom: q.f, dateTo: q.t })} style={ybtn(active)}>{q.l}</button>;
-                              })}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Custom date inputs */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span style={{ fontSize: 12, color: T.textMuted, minWidth: 90 }}>Custom</span>
-                          <input type="date" value={f.dateFrom} onChange={e => setFilter(ep.id, { dateFrom: e.target.value })} style={inputStyle} />
-                          <span style={{ fontSize: 11, color: T.textDim }}>→</span>
-                          <input type="date" value={f.dateTo}   onChange={e => setFilter(ep.id, { dateTo:   e.target.value })} style={inputStyle} />
-                        </div>
-
-                      </div>
-                    );
-                  })()}
-
-                </div>
-              )}
             </Card>
           );
         })}
@@ -2508,10 +2430,10 @@ const GLPISync = ({ api }) => {
           <Icon name="info" size={14} color={T.accent} />
           <span style={{ fontWeight: 600, color: T.accent }}>How it works</span>
         </div>
-        Sync <strong style={{ color: T.text }}>Dataflows</strong> and <strong style={{ color: T.text }}>App Structures</strong> first — they build the architecture map.
-        For <strong style={{ color: T.text }}>Tickets</strong>, <strong style={{ color: T.text }}>Changes</strong>, and <strong style={{ color: T.text }}>Projects</strong>, use the Filters panel to pull data in quarterly batches
-        (e.g. Q1 2025, then Q2 2025). This keeps each sync fast and manageable.
-        Increase <strong style={{ color: T.text }}>Max records</strong> if a quarter has many items.
+        <strong style={{ color: T.text }}>Live</strong> stages run every execution (auth, incremental tickets, followups, tasks, rescore).
+        <strong style={{ color: T.text }}> Hourly</strong> adds change records.
+        <strong style={{ color: T.text }}> Nightly</strong> adds full reconciliation, user directory, reopens, and escalation history.
+        Use <strong style={{ color: T.text }}>Force full re-sync</strong> to bypass incremental filters on the next run.
       </div>
     </div>
   );
