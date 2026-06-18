@@ -49,6 +49,7 @@ app.use('/api/graph',     auth, require('./routes/graph'));
 app.use('/api/query',     auth, require('./routes/query'));
 app.use('/api/train',     auth, require('./routes/train'));
 app.use('/api/sync',      auth, require('./routes/sync'));
+app.use('/api/pipeline',  auth, require('./routes/pipeline'));
 
 // ── START ────────────────────────────────────────────────
 app.listen(PORT, async () => {
