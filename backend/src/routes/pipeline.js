@@ -1284,7 +1284,7 @@ async function runDataflowITSMLinks(ctx) {
   for (const row of itemProblems) { const id = String(row.items_id);     ensure(id); byDf[id].problems.push(String(row.problems_id)); }
   for (const row of itemProjects) { const id = String(row.items_id);     ensure(id); byDf[id].projects.push(String(row.projects_id)); }
 
-  // ③ Write to Neo4j sequentially — one rel per row, MERGE is idempotent
+  // ③ Write stub nodes + rels to Neo4j sequentially — MERGE is idempotent
   let count = 0;
   for (const [dfId, links] of Object.entries(byDf)) {
     for (const ticketId of links.tickets) {
@@ -1325,12 +1325,80 @@ async function runDataflowITSMLinks(ctx) {
     }
   }
 
+  // ④ Enrich stubs: fetch name/status from GLPI for every linked item (parallel batches of 20)
+  const ITIL_STATUS = { 1: 'New', 2: 'Processing (assigned)', 3: 'Processing (planned)', 4: 'Pending', 5: 'Solved', 6: 'Closed' };
+  const batchFetch = async (glpiType, ids) => {
+    const BATCH = 20;
+    const out = [];
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const slice = ids.slice(i, i + BATCH);
+      const results = await Promise.all(slice.map(async id => {
+        try {
+          const data = await glpiFetch(baseUrl, `${glpiType}/${id}?expand_dropdowns=true`, sessionToken, appToken);
+          return (data && !data.error && (data.id || data.name)) ? { id, data } : null;
+        } catch { return null; }
+      }));
+      out.push(...results.filter(Boolean));
+    }
+    return out;
+  };
+
+  const uniqueTicketIds  = [...new Set(itemTickets.map(r => String(r.tickets_id)))];
+  const uniqueChangeIds  = [...new Set(changeItems.map(r => String(r.changes_id)))];
+  const uniqueProblemIds = [...new Set(itemProblems.map(r => String(r.problems_id)))];
+
+  const [ticketDetails, changeDetails, problemDetails] = await Promise.all([
+    batchFetch('Ticket', uniqueTicketIds),
+    batchFetch('Change',  uniqueChangeIds),
+    batchFetch('Problem', uniqueProblemIds),
+  ]);
+
+  for (const { id, data } of ticketDetails) {
+    try {
+      await s.run(
+        `MATCH (t:Ticket { glpiId: $id })
+         SET t.name = $name, t.status = $status, t.statusLabel = $statusLabel,
+             t.priority = $priority, t.date = $date, t.dateMod = $dateMod, t.category = $category`,
+        { id, name: data.name || '', status: String(data.status || ''),
+          statusLabel: ITIL_STATUS[data.status] || '', priority: String(data.priority || ''),
+          date: data.date || '', dateMod: data.date_mod || '',
+          category: String(data.itilcategories_id || '') }
+      );
+    } catch {}
+  }
+  for (const { id, data } of changeDetails) {
+    try {
+      await s.run(
+        `MATCH (c:Change { glpiId: $id })
+         SET c.name = $name, c.status = $status, c.statusLabel = $statusLabel,
+             c.priority = $priority, c.date = $date, c.dateMod = $dateMod, c.category = $category`,
+        { id, name: data.name || '', status: String(data.status || ''),
+          statusLabel: ITIL_STATUS[data.status] || '', priority: String(data.priority || ''),
+          date: data.date || '', dateMod: data.date_mod || '',
+          category: String(data.itilcategories_id || '') }
+      );
+    } catch {}
+  }
+  for (const { id, data } of problemDetails) {
+    try {
+      await s.run(
+        `MATCH (p:Problem { glpiId: $id })
+         SET p.name = $name, p.status = $status, p.statusLabel = $statusLabel,
+             p.priority = $priority, p.date = $date, p.dateMod = $dateMod`,
+        { id, name: data.name || '', status: String(data.status || ''),
+          statusLabel: ITIL_STATUS[data.status] || '', priority: String(data.priority || ''),
+          date: data.date || '', dateMod: data.date_mod || '' }
+      );
+    } catch {}
+  }
+
   return {
     count,
     tickets: itemTickets.length,
     changes: changeItems.length,
     problems: itemProblems.length,
     projects: itemProjects.length,
+    enriched: ticketDetails.length + changeDetails.length + problemDetails.length,
   };
 }
 
