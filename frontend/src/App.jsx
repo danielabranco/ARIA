@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { generateKnowledgePDF } from "./kbPdf";
 
 // ── LIGHTWEIGHT MARKDOWN RENDERER ────────────────────────────────────────────
 // Handles: ## h2, ### h3, > blockquote, | tables |, blank-line paragraphs
@@ -439,7 +440,7 @@ const GLPI_PRIORITY = {
   6: { label: "Major",     color: "#7f1d1d" },
 };
 
-const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT_COLORS }) => {
+const KnowledgeDetailPanel = ({ entry, api, onClose, onReviewChange, CAT_COLORS }) => {
   const [activeTab, setActiveTab] = useState("changes");
   const [glpiData, setGlpiData]   = useState(null);
   const [loadingGlpi, setLoadingGlpi] = useState(false);
@@ -619,7 +620,7 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
             <h2 style={{ fontSize: 17, fontWeight: 700, color: T.text, lineHeight: 1.3, margin: 0 }}>{entry.topic}</h2>
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 16, flexShrink: 0 }}>
-            <Btn size="sm" variant="secondary" icon="edit" onClick={() => { onClose(); onEdit(entry); }}>Edit</Btn>
+            <Btn size="sm" variant="secondary" icon="download" onClick={() => generateKnowledgePDF(entry)}>Download PDF</Btn>
             <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.textMuted, padding: 4, display: "flex", borderRadius: 6 }}>
               <Icon name="close" size={18} color={T.textMuted} />
             </button>
@@ -724,9 +725,6 @@ const KnowledgeBase = ({ api }) => {
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [editEntry, setEditEntry] = useState(null);
-  const [editDraft, setEditDraft] = useState({});
-  const [saving, setSaving] = useState(false);
   const [reviewFilter, setReviewFilter] = useState("all");
   const [detailEntry, setDetailEntry] = useState(null);
 
@@ -740,36 +738,6 @@ const KnowledgeBase = ({ api }) => {
   useEffect(() => { load(); }, [filter, search]);
 
   const deleteEntry = async (id) => { await api.del(`/api/knowledge/${id}`); load(); };
-
-  const openEdit = (entry) => {
-    const existingDfId = (entry.tags || []).find(t => t.startsWith("dataflow-"))?.replace("dataflow-", "") || "";
-    setEditEntry(entry);
-    setEditDraft({ topic: entry.topic, content: entry.content, tags: (entry.tags || []).join(", "), reviewStatus: entry.reviewStatus || "pending", dataflowId: existingDfId });
-  };
-  const closeEdit = () => { setEditEntry(null); setEditDraft({}); };
-
-  const saveEdit = async () => {
-    setSaving(true);
-    try {
-      let tags = editDraft.tags.split(",").map(t => t.trim()).filter(Boolean);
-      // If dataflowId was set/changed, ensure the tag is present and topic reflects it
-      if (editDraft.dataflowId) {
-        tags = tags.filter(t => !t.startsWith("dataflow-"));
-        tags.push(`dataflow-${editDraft.dataflowId}`);
-        if (!tags.includes("talend")) tags.push("talend");
-      }
-      await api.put(`/api/knowledge/${editEntry.id}`, {
-        topic: editDraft.topic,
-        content: editDraft.content,
-        tags,
-        reviewStatus: editDraft.reviewStatus,
-        dataflowId: editDraft.dataflowId || null,
-      });
-      closeEdit();
-      load();
-    } catch (e) { console.error(e); }
-    setSaving(false);
-  };
 
   const setReviewStatus = async (id, status) => {
     await api.put(`/api/knowledge/${id}`, { reviewStatus: status });
@@ -892,12 +860,6 @@ const KnowledgeBase = ({ api }) => {
                         ))}
                       </div>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={e => { e.stopPropagation(); openEdit(entry); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: T.textDim, display: "flex" }}
-                          onMouseEnter={e => e.currentTarget.style.color = T.accent}
-                          onMouseLeave={e => e.currentTarget.style.color = T.textDim}
-                          title="Edit">
-                          <Icon name="edit" size={14} color="currentColor" />
-                        </button>
                         <button onClick={e => { e.stopPropagation(); deleteEntry(entry.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: T.textDim, display: "flex" }}
                           onMouseEnter={e => e.currentTarget.style.color = T.danger}
                           onMouseLeave={e => e.currentTarget.style.color = T.textDim}
@@ -920,7 +882,6 @@ const KnowledgeBase = ({ api }) => {
           api={api}
           CAT_COLORS={CAT_COLORS}
           onClose={() => setDetailEntry(null)}
-          onEdit={(e) => { setDetailEntry(null); openEdit(e); }}
           onReviewChange={(id, status) => {
             setReviewStatus(id, status);
             setDetailEntry(prev => prev ? { ...prev, reviewStatus: status } : prev);
@@ -928,62 +889,6 @@ const KnowledgeBase = ({ api }) => {
         />
       )}
 
-      {/* Edit / View Modal */}
-      {editEntry && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-          <div style={{ background: T.surface, borderRadius: T.radiusLg, border: `1px solid ${T.border}`, width: "100%", maxWidth: 680, maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: T.shadowMd }}>
-            <div style={{ padding: "18px 24px", borderBottom: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: 700, fontSize: 14, color: T.text }}>Edit Knowledge Entry</span>
-              <button onClick={closeEdit} style={{ background: "none", border: "none", cursor: "pointer", color: T.textMuted, fontSize: 18, lineHeight: 1 }}>✕</button>
-            </div>
-            <div style={{ padding: "20px 24px", overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
-              <div>
-                <label style={{ fontSize: 11, color: T.textMuted, fontWeight: 600, display: "block", marginBottom: 6 }}>TOPIC</label>
-                <DarkInput value={editDraft.topic || ""} onChange={e => setEditDraft(d => ({ ...d, topic: e.target.value }))} placeholder="Entry topic" />
-              </div>
-              <div>
-                <label style={{ fontSize: 11, color: T.textMuted, fontWeight: 600, display: "block", marginBottom: 6 }}>CONTENT</label>
-                <textarea value={editDraft.content || ""} onChange={e => setEditDraft(d => ({ ...d, content: e.target.value }))}
-                  style={{ width: "100%", minHeight: 260, background: T.bg, border: `1px solid ${T.border}`, borderRadius: T.radiusSm, color: T.text, fontSize: 12, padding: "10px 12px", fontFamily: "inherit", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box" }} />
-              </div>
-              {(editEntry?.category === "talend-job" || (editEntry?.tags || []).includes("talend")) && (
-                <div>
-                  <label style={{ fontSize: 11, color: "#6e40c9", fontWeight: 600, display: "block", marginBottom: 6 }}>GLPI DATAFLOW ID</label>
-                  <DarkInput
-                    value={editDraft.dataflowId || ""}
-                    onChange={e => setEditDraft(d => ({ ...d, dataflowId: e.target.value.replace(/\D/g, "") }))}
-                    placeholder="e.g. 262 — links this job to the GLPI dataflow"
-                  />
-                  <div style={{ fontSize: 11, color: T.textDim, marginTop: 4 }}>Leave blank if unknown — you can fill it in after reviewing in GLPI.</div>
-                </div>
-              )}
-              <div>
-                <label style={{ fontSize: 11, color: T.textMuted, fontWeight: 600, display: "block", marginBottom: 6 }}>TAGS (comma-separated)</label>
-                <DarkInput value={editDraft.tags || ""} onChange={e => setEditDraft(d => ({ ...d, tags: e.target.value }))} placeholder="tag1, tag2, tag3" />
-              </div>
-              <div>
-                <label style={{ fontSize: 11, color: T.textMuted, fontWeight: 600, display: "block", marginBottom: 6 }}>REVIEW STATUS</label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {Object.entries(REVIEW_STATUS).map(([key, val]) => (
-                    <button key={key} onClick={() => setEditDraft(d => ({ ...d, reviewStatus: key }))}
-                      style={{
-                        padding: "6px 14px", borderRadius: T.radiusSm, cursor: "pointer", fontSize: 12, fontWeight: 600,
-                        background: editDraft.reviewStatus === key ? `${val.color}25` : "transparent",
-                        color: editDraft.reviewStatus === key ? val.color : T.textMuted,
-                        border: `1.5px solid ${editDraft.reviewStatus === key ? val.color : T.border}`,
-                        fontFamily: "inherit",
-                      }}>{val.label}</button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div style={{ padding: "14px 24px", borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <Btn variant="secondary" onClick={closeEdit}>Cancel</Btn>
-              <Btn onClick={saveEdit} disabled={saving}>{saving ? "Saving..." : "Save Changes"}</Btn>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
