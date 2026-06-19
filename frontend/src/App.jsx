@@ -2311,14 +2311,16 @@ const GLPISync = ({ api }) => {
   const overallColor  = { RUNNING: T.warning, ERROR: T.danger, SYNCED: T.success, IDLE: T.textDim }[overallStatus];
 
   const STORE_ITEMS = [
-    { k: "tickets",    label: "TICKETS",    color: T.success },
-    { k: "followups",  label: "FOLLOWUPS",  color: T.accent  },
-    { k: "reopens",    label: "REOPENS",    color: T.warning },
-    { k: "history",    label: "HISTORY",    color: T.textMuted },
-    { k: "tasks",      label: "TASKS",      color: T.pink    },
-    { k: "users",      label: "USERS",      color: T.teal    },
-    { k: "groups",     label: "GROUPS",     color: T.purple  },
-    { k: "categories", label: "CATEGORIES", color: T.accent  },
+    { k: "tickets",      label: "TICKETS",      color: T.success   },
+    { k: "followups",    label: "FOLLOWUPS",    color: T.accent    },
+    { k: "reopens",      label: "REOPENS",      color: T.warning   },
+    { k: "history",      label: "HISTORY",      color: T.textMuted },
+    { k: "tasks",        label: "TASKS",        color: T.pink      },
+    { k: "users",        label: "USERS",        color: T.teal      },
+    { k: "groups",       label: "GROUPS",       color: T.purple    },
+    { k: "categories",   label: "CATEGORIES",   color: T.accent    },
+    { k: "dataflows",    label: "DATAFLOWS",    color: T.warning   },
+    { k: "applications", label: "APP STRUCTS",  color: T.success   },
   ];
 
   return (
@@ -2385,7 +2387,7 @@ const GLPISync = ({ api }) => {
       </Card>
 
       {/* ── Store counts ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 8, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(10, 1fr)", gap: 8, marginBottom: 14 }}>
         {STORE_ITEMS.map(c => (
           <Card key={c.k} style={{ padding: "10px 8px", textAlign: "center" }}>
             <div style={{ fontSize: 17, fontWeight: 800, color: c.color, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
