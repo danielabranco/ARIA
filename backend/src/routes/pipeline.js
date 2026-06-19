@@ -656,7 +656,7 @@ async function runAppStructures(ctx) {
   let count = 0;
 
   for (const item of items) {
-    const rawStatus = String(item.states_id || '').toLowerCase();
+    const rawStatus = String(item.plugin_archisw_swcomponentstates_id || '').toLowerCase();
     if (INACTIVE.some(s => rawStatus.includes(s))) continue;
 
     const appId       = String(item.id);
@@ -667,7 +667,7 @@ async function runAppStructures(ctx) {
     const appEntity     = String(item.entities_id || '');
     const appDesc       = item.shortdescription || item.description || '';
     const appComment    = item.comment || '';
-    const appStatus     = String(item.states_id || '');
+    const appStatus     = String(item.plugin_archisw_swcomponentstates_id || '');
     const appSupplier   = String(item.suppliers_id || '');
     const appUrlProd    = item.url_prod || '';
     const appUrlQA      = item.url_qa || '';
@@ -1373,6 +1373,35 @@ router.put('/config', async (req, res) => {
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
   finally { await s.close(); }
+});
+
+// GET /api/pipeline/glpi-raw?endpoint=... — fetch raw GLPI using stored config (diagnostic)
+router.get('/glpi-raw', async (req, res) => {
+  const { endpoint } = req.query;
+  if (!endpoint) return res.status(400).json({ error: 'endpoint query param required' });
+  const { getConfig } = require('../lib/scheduler');
+  const cfg = await getConfig();
+  if (!cfg || !cfg.glpiUrl) return res.status(503).json({ error: 'No stored pipeline config' });
+  const base = cfg.glpiUrl.replace(/\/$/, '');
+  const agent = base.startsWith('https') ? httpsAgent : undefined;
+  try {
+    enforceGetOnly('GET');
+    const sessRes = await fetch(`${base}/apirest.php/initSession`, {
+      method: 'GET',
+      headers: { 'Authorization': `user_token ${cfg.glpiUserToken}`, 'App-Token': cfg.glpiAppToken },
+      agent,
+    });
+    const sessData = await sessRes.json();
+    if (!sessData.session_token) return res.status(401).json({ error: 'GLPI auth failed', detail: sessData });
+    const token = sessData.session_token;
+    const r = await fetch(`${base}/apirest.php/${endpoint}`, {
+      headers: glpiHeaders(token, cfg.glpiAppToken),
+      agent,
+    });
+    const body = await r.json().catch(() => ({}));
+    await fetch(`${base}/apirest.php/killSession`, { headers: glpiHeaders(token, cfg.glpiAppToken), agent }).catch(() => {});
+    res.json({ status: r.status, body });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 module.exports = router;
