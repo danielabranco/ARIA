@@ -1383,38 +1383,44 @@ async function runStubEnrichment(ctx) {
   const problemIds = pRes.records.map(r => r.get('id'));
   let count = 0;
   for (const id of ticketIds) {
-    const item = await glpiFetch(baseUrl, `Ticket/${id}`, sessionToken, appToken);
-    if (!item || item.error || !item.id) continue;
-    await s.run(
-      `MERGE (t:Ticket { glpiId: $id })
-       SET t.name = $name, t.status = $status, t.priority = $priority,
-           t.date = $date, t.dateMod = $dateMod, t.updatedAt = $now`,
-      { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), priority: String(item.priority ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() }
-    );
-    count++;
+    try {
+      const item = await glpiFetch(baseUrl, `Ticket/${id}`, sessionToken, appToken);
+      if (!item || item.error || !item.id) continue;
+      await s.run(
+        `MERGE (t:Ticket { glpiId: $id })
+         SET t.name = $name, t.status = $status, t.priority = $priority,
+             t.date = $date, t.dateMod = $dateMod, t.updatedAt = $now`,
+        { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), priority: String(item.priority ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() }
+      );
+      count++;
+    } catch {}
   }
   for (const id of changeIds) {
-    const item = await glpiFetch(baseUrl, `Change/${id}`, sessionToken, appToken);
-    if (!item || item.error || !item.id) continue;
-    await s.run(
-      `MERGE (c:Change { glpiId: $id })
-       SET c.name = $name, c.status = $status,
-           c.date = $date, c.dateMod = $dateMod, c.updatedAt = $now`,
-      { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() }
-    );
-    count++;
+    try {
+      const item = await glpiFetch(baseUrl, `Change/${id}`, sessionToken, appToken);
+      if (!item || item.error || !item.id) continue;
+      await s.run(
+        `MERGE (c:Change { glpiId: $id })
+         SET c.name = $name, c.status = $status,
+             c.date = $date, c.dateMod = $dateMod, c.updatedAt = $now`,
+        { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() }
+      );
+      count++;
+    } catch {}
   }
   for (const id of problemIds) {
-    const item = await glpiFetch(baseUrl, `Problem/${id}`, sessionToken, appToken);
-    if (!item || item.error || !item.id) continue;
-    await s.run(
-      `MERGE (p:Problem { glpiId: $id })
-       SET p.name = $name, p.status = $status, p.priority = $priority,
-           p.urgency = $urgency, p.impact = $impact,
-           p.date = $date, p.dateMod = $dateMod, p.updatedAt = $now`,
-      { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), priority: String(item.priority ?? ''), urgency: String(item.urgency ?? ''), impact: String(item.impact ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() }
-    );
-    count++;
+    try {
+      const item = await glpiFetch(baseUrl, `Problem/${id}`, sessionToken, appToken);
+      if (!item || item.error || !item.id) continue;
+      await s.run(
+        `MERGE (p:Problem { glpiId: $id })
+         SET p.name = $name, p.status = $status, p.priority = $priority,
+             p.urgency = $urgency, p.impact = $impact,
+             p.date = $date, p.dateMod = $dateMod, p.updatedAt = $now`,
+        { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), priority: String(item.priority ?? ''), urgency: String(item.urgency ?? ''), impact: String(item.impact ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() }
+      );
+      count++;
+    } catch {}
   }
   return { count, tickets: ticketIds.length, changes: changeIds.length, problems: problemIds.length };
 }
