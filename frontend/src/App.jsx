@@ -1,5 +1,60 @@
 import { useState, useRef, useEffect } from "react";
 
+// ── LIGHTWEIGHT MARKDOWN RENDERER ────────────────────────────────────────────
+// Handles: ## h2, ### h3, > blockquote, | tables |, blank-line paragraphs
+function KnowledgeMarkdown({ content = "" }) {
+  const lines = content.split("\n");
+  const nodes = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    // h2
+    if (/^## /.test(line)) {
+      nodes.push(<h2 key={i} style={{ fontSize: 15, fontWeight: 700, color: T.text, margin: "18px 0 8px", borderBottom: `1px solid ${T.border}`, paddingBottom: 6 }}>{line.slice(3)}</h2>);
+      i++; continue;
+    }
+    // h3
+    if (/^### /.test(line)) {
+      nodes.push(<h3 key={i} style={{ fontSize: 13, fontWeight: 600, color: T.accent, margin: "14px 0 6px", textTransform: "uppercase", letterSpacing: "0.05em" }}>{line.slice(4)}</h3>);
+      i++; continue;
+    }
+    // blockquote
+    if (/^> /.test(line)) {
+      nodes.push(<blockquote key={i} style={{ margin: "8px 0", padding: "8px 14px", borderLeft: `3px solid ${T.accent}`, background: T.bgElevated, color: T.textSecondary, fontSize: 13, borderRadius: "0 4px 4px 0", fontStyle: "italic" }}>{line.slice(2)}</blockquote>);
+      i++; continue;
+    }
+    // table — collect all consecutive pipe lines
+    if (/^\|/.test(line)) {
+      const tableLines = [];
+      while (i < lines.length && /^\|/.test(lines[i])) { tableLines.push(lines[i]); i++; }
+      const parseRow = (r) => r.split("|").slice(1, -1).map(c => c.trim());
+      const header = parseRow(tableLines[0]);
+      const body   = tableLines.slice(2); // skip separator row
+      nodes.push(
+        <table key={i} style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, margin: "4px 0 10px" }}>
+          <thead>
+            <tr>{header.map((h, ci) => <th key={ci} style={{ textAlign: "left", padding: "5px 10px", background: T.card, color: T.textMuted, fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${T.border}` }}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {body.map((row, ri) => (
+              <tr key={ri} style={{ background: ri % 2 === 0 ? "transparent" : T.bgElevated }}>
+                {parseRow(row).map((cell, ci) => <td key={ci} style={{ padding: "5px 10px", color: T.textSecondary, borderBottom: `1px solid ${T.border}22`, wordBreak: "break-all" }}>{cell}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+      continue;
+    }
+    // blank line
+    if (line.trim() === "") { i++; continue; }
+    // paragraph
+    nodes.push(<p key={i} style={{ margin: "4px 0", fontSize: 13, color: T.textSecondary, lineHeight: 1.6 }}>{line}</p>);
+    i++;
+  }
+  return <div style={{ padding: "2px 0" }}>{nodes}</div>;
+}
+
 // ── DESIGN TOKENS (dark) ─────────────────────────────────
 const T = {
   bg:           "#0A0E1A",
@@ -388,7 +443,6 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
 
   const cfg     = api.cfg();
   const glpiUrl = cfg.glpiUrl || "";
-  const hasCreds = glpiUrl && cfg.glpiUserToken && cfg.glpiAppToken;
 
   const dfId = entry.dataflowId ||
     (entry.tags || []).find(t => t.startsWith("dataflow-"))?.replace("dataflow-", "") ||
@@ -396,12 +450,16 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
   const appId = entry.category !== "dataflow" ? entry.glpiId : null;
 
   useEffect(() => {
-    if (!hasCreds) return;
+    if (!dfId) return;
     setLoadingGlpi(true);
     setGlpiError(null);
-    const params = new URLSearchParams({ glpiUrl, userToken: cfg.glpiUserToken, appToken: cfg.glpiAppToken });
-    api.get(`/api/knowledge/${entry.id}/glpi-links?${params}`)
-      .then(d => setGlpiData(d))
+    api.get(`/api/pipeline/dataflow/${dfId}/linked`)
+      .then(d => setGlpiData({
+        tickets:        d.tickets  || [],
+        changes:        d.changes  || [],
+        problems:       [],
+        associatedItems: d.apps    || [],
+      }))
       .catch(e => setGlpiError(e.message))
       .finally(() => setLoadingGlpi(false));
   }, [entry.id]);
@@ -521,14 +579,12 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
         </div>
 
         {/* BODY */}
-        <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
 
-          {/* Full content */}
-          <div style={{ padding: "20px 24px", borderBottom: `1px solid ${T.border}` }}>
+          {/* Full content — capped so linked items are always visible */}
+          <div style={{ padding: "20px 24px", borderBottom: `1px solid ${T.border}`, overflowY: "auto", maxHeight: "42vh", flexShrink: 0 }}>
             <FieldLabel>Content</FieldLabel>
-            <pre style={{ fontFamily: "inherit", fontSize: 13, color: T.textSecondary, lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>
-              {entry.content}
-            </pre>
+            <KnowledgeMarkdown content={entry.content} />
             {entry.tags?.length > 0 && (
               <div style={{ marginTop: 12, display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {entry.tags.map(t => <span key={t} style={{ fontSize: 10, background: T.border, color: T.textMuted, borderRadius: 4, padding: "2px 7px" }}>{t}</span>)}
@@ -552,15 +608,15 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
           </div>
 
           {/* GLPI Linked Items */}
-          <div style={{ flex: 1, padding: "20px 24px", overflow: "auto", minHeight: 0 }}>
+          <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto", minHeight: 200 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
               <FieldLabel>GLPI Linked Items</FieldLabel>
               {loadingGlpi && <span style={{ fontSize: 11, color: T.textDim }}>Loading from GLPI…</span>}
               {glpiError && <span style={{ fontSize: 11, color: T.danger }}>Error: {glpiError}</span>}
             </div>
 
-            {!hasCreds ? (
-              <div style={{ fontSize: 13, color: T.textDim, padding: "24px 0" }}>Configure GLPI connection in Settings to see linked items.</div>
+            {!dfId ? (
+              <div style={{ fontSize: 13, color: T.textDim, padding: "24px 0" }}>No dataflow linked to this entry.</div>
             ) : (
               <>
                 {/* Tab bar */}
