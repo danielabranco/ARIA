@@ -724,8 +724,6 @@ const KnowledgeBase = ({ api }) => {
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState(null);
   const [editEntry, setEditEntry] = useState(null);
   const [editDraft, setEditDraft] = useState({});
   const [saving, setSaving] = useState(false);
@@ -740,21 +738,6 @@ const KnowledgeBase = ({ api }) => {
   };
 
   useEffect(() => { load(); }, [filter, search]);
-
-  const importFromGlpi = async (type) => {
-    setImporting(true);
-    setImportMsg({ type: "info", text: `Importing ${type}...` });
-    try {
-      const cfg = api.cfg();
-      const data = await api.post("/api/knowledge/import-glpi", { type, glpiUrl: cfg.glpiUrl, userToken: cfg.glpiUserToken, appToken: cfg.glpiAppToken });
-      setImportMsg({ type: "success", text: `Imported ${data.imported || 0} ${type} entries` });
-      load();
-    } catch (e) {
-      setImportMsg({ type: "error", text: `Error: ${e.message}` });
-    }
-    setImporting(false);
-    setTimeout(() => setImportMsg(null), 4000);
-  };
 
   const deleteEntry = async (id) => { await api.del(`/api/knowledge/${id}`); load(); };
 
@@ -796,37 +779,9 @@ const KnowledgeBase = ({ api }) => {
   const CATS = ["all","dataflow","talend-job","application","change","ticket","project","manual","document","ai-generated"];
   const CAT_COLORS = { dataflow: T.danger, "talend-job": "#6e40c9", application: T.accent, change: T.warning, ticket: T.success, project: T.purple, manual: T.pink, document: T.teal, "ai-generated": "#0ea5e9" };
 
-  const IMPORT_TYPES = [
-    { id: "dataflows",  label: "Dataflows",  icon: "flow"     },
-    { id: "appstructs", label: "Apps",        icon: "monitor"  },
-    { id: "changes",    label: "Changes",     icon: "refresh"  },
-    { id: "tickets",    label: "Tickets",     icon: "ticket"   },
-    { id: "projects",   label: "Projects",    icon: "folder"   },
-  ];
-
   return (
     <div>
-      <SectionHeader title="Knowledge Base" subtitle="Everything ARIA knows about the OMDS IT ecosystem."
-        actions={
-          <div style={{ display: "flex", gap: 6 }}>
-            {IMPORT_TYPES.map(t => (
-              <Btn key={t.id} size="sm" variant="secondary" icon={t.icon} onClick={() => importFromGlpi(t.id)} disabled={importing}>
-                {t.label}
-              </Btn>
-            ))}
-          </div>
-        }
-      />
-
-      {importMsg && (
-        <div style={{ marginBottom: 16, padding: "10px 16px", borderRadius: T.radius, fontSize: 13, fontWeight: 500,
-          background: importMsg.type === "success" ? T.successGlow : importMsg.type === "error" ? T.dangerGlow : T.accentGlow,
-          border: `1px solid ${importMsg.type === "success" ? T.success : importMsg.type === "error" ? T.danger : T.accent}30`,
-          color: importMsg.type === "success" ? T.success : importMsg.type === "error" ? T.danger : T.accent,
-        }}>
-          {importMsg.text}
-        </div>
-      )}
+      <SectionHeader title="Knowledge Base" subtitle="Everything ARIA knows about the OMDS IT ecosystem." />
 
       <div style={{ display: "flex", gap: 10, marginBottom: 12, alignItems: "center" }}>
         <div style={{ flex: 1 }}>
