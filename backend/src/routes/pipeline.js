@@ -886,9 +886,9 @@ async function runDataflowLookups(ctx) {
     { endpoint: 'PluginDataflowsIndicator',              table: 'indicator' },
   ];
   const GDPR_PREFIX = {
-    'Customer Confidential Data':       '🔴 Customer Confidential Data',
-    'Indirect Customer Identification': '🟡 Indirect Customer Identification',
-    'Nonidentifiable/ anonymous data':  '🟢 Nonidentifiable / anonymous data',
+    'Level 1': '🔴 Customer Confidential Data',
+    'Level 2': '🟡 Indirect Customer Identification',
+    'Level 3': '🟢 Nonidentifiable / anonymous data',
   };
   let count = 0;
   for (const { endpoint, table } of LOOKUP_TABLES) {
@@ -1005,6 +1005,9 @@ async function runDataflows(ctx) {
       for (const a of apps) { if (a.id && a.name) ctx.appIdMap.set(String(a.id), a.name); }
     } catch {}
   }
+  // Reverse map: name → glpiId (needed for building GLPI links when expand_dropdowns returns labels)
+  const appNameToId = new Map();
+  for (const [id, name] of ctx.appIdMap) appNameToId.set(name, id);
 
   const resolveApp = (val) => {
     if (!val || val === '0') return '';
@@ -1057,13 +1060,13 @@ async function runDataflows(ctx) {
       const dfTopic   = `Dataflow #${dfId} — ${dfName}`;
       const dfGdpr    = resolveLookup('holiday_action', item.plugin_dataflows_holidayactions_id, ctx);
       const dfIndicator = String(item.plugin_dataflows_indicators_id || '');
-      const srcRawId  = item.plugin_dataflows_fromswcomponents_id;
-      const dstRawId  = item.plugin_dataflows_toswcomponents_id;
-      const srcLink   = src && srcRawId && String(srcRawId) !== '0'
-        ? `[${src}](${baseUrl}/plugins/archisw/front/swcomponent.form.php?id=${srcRawId})`
+      const srcGlpiId = src ? appNameToId.get(src) : null;
+      const dstGlpiId = dst ? appNameToId.get(dst) : null;
+      const srcLink   = src && srcGlpiId
+        ? `[${src}](${baseUrl}/plugins/archisw/front/swcomponent.form.php?id=${srcGlpiId})`
         : (src || 'unknown');
-      const dstLink   = dst && dstRawId && String(dstRawId) !== '0'
-        ? `[${dst}](${baseUrl}/plugins/archisw/front/swcomponent.form.php?id=${dstRawId})`
+      const dstLink   = dst && dstGlpiId
+        ? `[${dst}](${baseUrl}/plugins/archisw/front/swcomponent.form.php?id=${dstGlpiId})`
         : (dst || 'unknown');
       const dateMod   = String(item.date_mod || '').substring(0, 10);
       const row = (k, v) => v ? `| ${k} | ${v} |` : '';
