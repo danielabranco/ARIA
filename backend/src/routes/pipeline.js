@@ -657,10 +657,10 @@ async function runAppStructures(ctx) {
 
   for (const item of items) {
     const rawStatus = String(item.plugin_archisw_swcomponentstates_id || '').toLowerCase();
-    if (INACTIVE.some(s => rawStatus.includes(s))) continue;
 
-    const appId       = String(item.id);
-    const appName     = item.name || appId;
+    const appId   = String(item.id);
+    const appName = item.name || appId;
+    // Still add removed apps to appIdMap so dataflow resolution works
     ctx.appIdMap.set(appId, appName);
 
     const appType       = String(item.plugin_archisw_swcomponenttypes_id || item.swcomponenttypes_id || '');
