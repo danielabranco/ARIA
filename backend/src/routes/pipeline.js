@@ -1129,4 +1129,44 @@ router.post('/run', async (req, res) => {
   }
 });
 
+// GET /api/pipeline/config — read scheduler config (creds redacted)
+router.get('/config', async (req, res) => {
+  const s = driver.session();
+  try {
+    const r = await s.run(`MATCH (c:PipelineConfig { id: 'default' }) RETURN c`);
+    if (!r.records.length) return res.json({ config: null });
+    const p = { ...r.records[0].get('c').properties };
+    delete p.glpiUserToken;
+    delete p.glpiAppToken;
+    res.json({ config: p });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { await s.close(); }
+});
+
+// PUT /api/pipeline/config — save scheduler config and restart scheduler
+router.put('/config', async (req, res) => {
+  const { glpiUrl, userToken, appToken, liveIntervalMin, nightlyTime, enabled } = req.body;
+  if (!glpiUrl || !userToken || !appToken) return res.status(400).json({ error: 'glpiUrl, userToken, appToken required' });
+  const s = driver.session();
+  try {
+    await s.run(
+      `MERGE (c:PipelineConfig { id: 'default' })
+       SET c.glpiUrl = $glpiUrl, c.glpiUserToken = $userToken, c.glpiAppToken = $appToken,
+           c.liveIntervalMin = $liveMin, c.nightlyTime = $nightlyTime,
+           c.enabled = $enabled, c.updatedAt = $now`,
+      {
+        glpiUrl, userToken, appToken,
+        liveMin:     String(liveIntervalMin || '5'),
+        nightlyTime: nightlyTime || '02:00',
+        enabled:     enabled !== false,
+        now:         new Date().toISOString(),
+      }
+    );
+    const { startScheduler } = require('../lib/scheduler');
+    await startScheduler();
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { await s.close(); }
+});
+
 module.exports = router;
