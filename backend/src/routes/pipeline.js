@@ -1567,7 +1567,7 @@ router.post('/run', async (req, res) => {
   const errors  = {};
 
   const targetStages = stageOverride
-    ? STAGES.filter(st => stageOverride.includes(st.id))
+    ? STAGES.filter(st => st.id === 'session_auth' || stageOverride.includes(st.id))
     : stagesForTier(tier);
 
   const ctx = {
