@@ -94,8 +94,30 @@ function stripInline(text) {
     .replace(/\*(.+?)\*/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // strip non-Latin Unicode (emojis, icons, symbols) — jsPDF Helvetica is Latin-only
+    .replace(/[^\x00-\x024F]/g, '')
     .replace(/ +/g, ' ')
     .trim();
+}
+
+// Split raw markdown line into plain/link segments (preserves urls)
+function parseSegments(line) {
+  const segments = [];
+  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let last = 0, m;
+  const clean = s => s
+    .replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ').replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1').replace(/`([^`]+)`/g, '$1')
+    .replace(/[^\x00-\x024F]/g, '').replace(/ +/g, ' ').trim();
+  while ((m = linkRe.exec(line)) !== null) {
+    if (m.index > last) segments.push({ type: 'text', text: clean(line.slice(last, m.index)) });
+    segments.push({ type: 'link', text: clean(m[1]), url: m[2].trim() });
+    last = m.index + m[0].length;
+  }
+  if (last < line.length) segments.push({ type: 'text', text: clean(line.slice(last)) });
+  return segments.filter(s => s.text);
 }
 
 function parseTableRow(line) {
@@ -188,6 +210,58 @@ function renderContent(doc, content, startY, title) {
     y += 5;
   }
 
+  // Render a raw markdown line with clickable link support
+  function renderLineWithLinks(rawLine, startX, fontSize, lineH, maxW) {
+    const segments = parseSegments(rawLine);
+    const hasLinks = segments.some(s => s.type === 'link');
+
+    if (!hasLinks) {
+      // Fast path — plain text with word wrap
+      const plain = segments.map(s => s.text).join(' ');
+      doc.setFontSize(fontSize); doc.setTextColor(...NAVY);
+      doc.splitTextToSize(plain, maxW).forEach(wl => {
+        checkPage(lineH); doc.text(wl, startX, y); y += lineH;
+      });
+      return;
+    }
+
+    // Segment-by-segment rendering with link annotations
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(fontSize);
+    let cx = startX;
+    const LINK_H = fontSize * 0.3528 + 1.5; // approx glyph height in mm
+
+    for (const seg of segments) {
+      if (!seg.text) continue;
+      const isLink = seg.type === 'link';
+      doc.setTextColor(...(isLink ? ACCENT : NAVY));
+
+      const words = seg.text.split(/\s+/).filter(Boolean);
+      for (let wi = 0; wi < words.length; wi++) {
+        const prefix = cx > startX ? ' ' : '';
+        const piece  = prefix + words[wi];
+        const pw = doc.getTextWidth(piece);
+
+        if (cx > startX && cx + pw > startX + maxW) {
+          y += lineH; checkPage(lineH); cx = startX;
+        }
+
+        const draw = cx === startX ? words[wi] : piece;
+        doc.text(draw, cx, y);
+
+        if (isLink && seg.url) {
+          const tw = doc.getTextWidth(draw);
+          doc.setDrawColor(...ACCENT); doc.setLineWidth(0.15);
+          doc.line(cx, y + 0.8, cx + tw, y + 0.8);
+          doc.link(cx, y - LINK_H + 1, tw, LINK_H, { url: seg.url });
+        }
+
+        cx += doc.getTextWidth(draw);
+      }
+      if (cx > startX) cx += doc.getTextWidth(' '); // inter-segment space
+    }
+    y += lineH;
+  }
+
   // Walk lines one by one — never collapse across newlines
   const lines = content.split('\n');
   let i = 0;
@@ -278,20 +352,18 @@ function renderContent(doc, content, startY, title) {
     // List item
     const listMatch = line.match(/^(\s*)([-*+]|\d+\.) (.+)/);
     if (listMatch) {
-      const text = '• ' + stripInline(listMatch[3]);
       const indX = ML + Math.min(listMatch[1].length, 4) * 2;
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...NAVY);
-      doc.splitTextToSize(text, CW - (indX - ML)).forEach(wl => {
-        checkPage(LH); doc.text(wl, indX, y); y += LH;
-      });
+      doc.setFont('helvetica', 'normal');
+      checkPage(LH);
+      renderLineWithLinks('• ' + listMatch[3], indX, 10, LH, CW - (indX - ML));
       i++; continue;
     }
 
     // Normal paragraph line
-    const text = stripInline(line);
-    if (text) {
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...NAVY);
-      doc.splitTextToSize(text, CW).forEach(wl => { checkPage(LH); doc.text(wl, ML, y); y += LH; });
+    if (line.trim()) {
+      doc.setFont('helvetica', 'normal');
+      checkPage(LH);
+      renderLineWithLinks(line, ML, 10, LH, CW);
     }
     i++;
   }
