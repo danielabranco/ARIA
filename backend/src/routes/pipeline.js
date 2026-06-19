@@ -652,37 +652,56 @@ async function runFieldChangeHistory(ctx) {
 
 async function runAppStructures(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
-  const INACTIVE = ['removed', 'deleted', 'inactive'];
   const items = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent?expand_dropdowns=true', sessionToken, appToken);
-
   ctx.appIdMap = new Map();
   let count = 0;
 
-  for (const item of items) {
-    const rawStatus = String(item.plugin_archisw_swcomponentstates_id || '').toLowerCase();
+  const stripHtml = str => (str || '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/&#60;/g, '<').replace(/&#62;/g, '>').replace(/&#38;/g, '&')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/\s+/g, ' ').trim();
 
-    const appId   = String(item.id);
-    const appName = item.name || appId;
-    // Still add removed apps to appIdMap so dataflow resolution works
+  const dec = str => (str || '').toString()
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/&#60;/g, '<').replace(/&#62;/g, '>').replace(/&#38;/g, '&')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ');
+
+  const row = (label, value) => {
+    const v = dec(String(value || '')).replace(/^0$/, '').trim();
+    return v ? `| ${label} | ${v} |` : null;
+  };
+  const linkRow = (label, url) => url ? `| ${label} | [${url}](${url}) |` : null;
+
+  for (const item of items) {
+    const appId          = String(item.id);
+    const appName        = item.name || appId;
     ctx.appIdMap.set(appId, appName);
 
-    const appType       = String(item.plugin_archisw_swcomponenttypes_id || item.swcomponenttypes_id || '');
-    const appEntity     = String(item.entities_id || '');
-    const appDesc       = item.shortdescription || item.description || '';
-    const appComment    = item.comment || '';
-    const appStatus     = String(item.plugin_archisw_swcomponentstates_id || '');
-    const appSupplier   = String(item.suppliers_id || '');
-    const appUrlProd    = item.url_prod || '';
-    const appUrlQA      = item.url_qa || '';
-    const appOwner      = String(item.groups_id || '');
-    const appSla        = String(item.plugin_archisw_swcomponentslas_id || '');
-    const appInstances  = String(item.plugin_archisw_swcomponentinstances_id || '');
-    const appDatabase   = String(item.plugin_archisw_swcomponentdbs_id || '');
-    const appLocation   = String(item.locations_id || '');
-    const appTargets    = String(item.plugin_archisw_swcomponenttargets_id || '');
-    const appDevLang    = String(item.plugin_archisw_swcomponenttechnics_id || '');
-    const appInUseSince = String(item.plugin_archisw_inusesinceyear || '');
-    const now = new Date().toISOString();
+    const appType        = String(item.plugin_archisw_swcomponenttypes_id || '');
+    const appEntity      = String(item.entities_id || '');
+    const appDesc        = stripHtml(item.shortdescription || item.description || '');
+    const appComment     = stripHtml(item.comment || '');
+    const appStatus      = String(item.plugin_archisw_swcomponentstates_id || '');
+    const appStatusDate  = item.statedate ? String(item.statedate).substring(0, 10) : '';
+    const appSupplier    = String(item.suppliers_id || '');
+    const appUrlProd     = item.address     || '';
+    const appUrlQA       = item.address_qa  || '';
+    const appOwner       = String(item.groups_id || '');
+    const appSla         = String(item.plugin_archisw_swcomponentslas_id || '');
+    const appDataClass   = String(item.plugin_archisw_swcomponentusers_id || '');
+    const appDatabase    = String(item.plugin_archisw_swcomponentdbs_id   || '');
+    const appLocation    = String(item.locations_id || '');
+    const appTargets     = String(item.plugin_archisw_swcomponenttargets_id || '');
+    const appDevLang     = String(item.plugin_archisw_swcomponenttechnics_id || '');
+    const appInUseSince  = String(item.plugin_archisw_inusesinceyear || '');
+    const appInstances   = String(item.plugin_archisw_swcomponentinstances_id || '');
+    const appRepo        = item.repo         || '';
+    const appHealthCheck = item.health_check || '';
+    const appVersion     = item.version      || '';
+    const appDateMod     = item.date_mod ? String(item.date_mod).substring(0, 10) : '';
+    const now            = new Date().toISOString();
 
     await s.run(
       `MERGE (a:Application { name: $name })
@@ -691,61 +710,82 @@ async function runAppStructures(ctx) {
            a.supplier = $supplier, a.urlProd = $urlProd, a.urlQA = $urlQA,
            a.owner = $owner, a.sla = $sla, a.instances = $instances,
            a.database = $database, a.location = $location, a.targets = $targets,
-           a.status = $status, a.devLanguage = $devLang, a.inUseSince = $inUseSince,
+           a.status = $status, a.statusDate = $statusDate, a.devLanguage = $devLang,
+           a.inUseSince = $inUseSince, a.dataClassification = $dataClass,
+           a.repo = $repo, a.healthCheck = $healthCheck, a.version = $version,
            a.updatedAt = $now`,
       {
         name: appName, id: appId, type: appType, entity: appEntity,
-        desc: appDesc, comment: appComment, status: appStatus,
+        desc: appDesc, comment: appComment, status: appStatus, statusDate: appStatusDate,
         supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
         owner: appOwner, sla: appSla, instances: appInstances,
         database: appDatabase, location: appLocation, targets: appTargets,
-        devLang: appDevLang, inUseSince: appInUseSince, now,
+        devLang: appDevLang, inUseSince: appInUseSince, dataClass: appDataClass,
+        repo: appRepo, healthCheck: appHealthCheck, version: appVersion, now,
       }
     );
 
-    // Knowledge upsert — mirrors sync.js appstructs block exactly
     try {
       const appTopic = `Application #${appId} — ${appName}`;
-      const liveLines = ['GLPI LIVE DATA (auto-updated by sync):'];
-      liveLines.push(`GLPI ID: ${appId}`);
-      if (appStatus)     liveLines.push(`Status: ${appStatus}`);
-      if (appType)       liveLines.push(`Type: ${appType}`);
-      if (appOwner)      liveLines.push(`Owner: ${appOwner}`);
-      if (appSupplier)   liveLines.push(`Supplier: ${appSupplier}`);
-      if (appSla)        liveLines.push(`Service Level: ${appSla}`);
-      if (appInstances)  liveLines.push(`Instances: ${appInstances}`);
-      if (appDatabase)   liveLines.push(`Database: ${appDatabase}`);
-      if (appDevLang)    liveLines.push(`Dev Language: ${appDevLang}`);
-      if (appLocation)   liveLines.push(`Location: ${appLocation}`);
-      if (appTargets)    liveLines.push(`Targets: ${appTargets}`);
-      if (appInUseSince) liveLines.push(`In Use Since: ${appInUseSince}`);
-      if (appUrlProd)    liveLines.push(`URL Production: ${appUrlProd}`);
-      if (appUrlQA)      liveLines.push(`URL QA: ${appUrlQA}`);
-      liveLines.push(`Last synced: ${now.split('T')[0]}`);
-      const glpiLiveBlock = liveLines.join('\n');
+      const glpiLink = `${baseUrl}/plugins/archisw/front/swcomponent.form.php?id=${appId}`;
+
+      const content = [
+        `## Application #${appId} — ${appName}`,
+        '',
+        appDesc ? `> ${appDesc}` : null,
+        '',
+        '### General',
+        '| Field | Value |',
+        '|---|---|',
+        `| GLPI ID | [${appId}](${glpiLink}) |`,
+        row('Status',        appStatus),
+        row('Status Since',  appStatusDate),
+        row('Entity',        appEntity),
+        row('Last Modified', appDateMod),
+        `| Last Synced | ${now.substring(0, 10)} |`,
+        '',
+        '### Classification',
+        '| Field | Value |',
+        '|---|---|',
+        row('Type',                appType),
+        row('Data Classification', appDataClass),
+        row('Targets',             appTargets),
+        row('SLA',                 appSla),
+        row('Version',             appVersion),
+        row('In Use Since',        appInUseSince),
+        row('Database',            appDatabase),
+        row('Dev Language',        appDevLang),
+        '',
+        '### Ownership',
+        '| Field | Value |',
+        '|---|---|',
+        row('Owner Group', appOwner),
+        row('Supplier',    appSupplier),
+        '',
+        '### Access',
+        '| Field | Value |',
+        '|---|---|',
+        linkRow('Production URL', appUrlProd),
+        linkRow('QA URL',         appUrlQA),
+        linkRow('Health Check',   appHealthCheck),
+        linkRow('Repository',     appRepo),
+      ].filter(v => v !== null && v !== undefined).join('\n');
 
       const kRes = await s.run(
-        `MATCH (k:Knowledge) WHERE k.category = 'application' AND k.glpiId = $glpiId RETURN k.id AS id, k.content AS content`,
+        `MATCH (k:Knowledge) WHERE k.category = 'application' AND k.glpiId = $glpiId RETURN k.id AS id`,
         { glpiId: appId }
       );
       if (kRes.records.length > 0) {
-        for (const rec of kRes.records) {
-          const existing = rec.get('content') || '';
-          const stripped = existing.replace(/\n*GLPI LIVE DATA \(auto-updated by sync\):[\s\S]*$/, '').trim();
-          const newContent = stripped ? stripped + '\n\n' + glpiLiveBlock : glpiLiveBlock;
-          await s.run(
-            `MATCH (k:Knowledge) WHERE k.id = $id
-             SET k.topic = $topic, k.content = $content,
-                 k.supplier = $supplier, k.urlProd = $urlProd,
-                 k.urlQA = $urlQA, k.owner = $owner, k.sla = $sla,
-                 k.glpiSyncedAt = $now`,
-            { id: rec.get('id'), topic: appTopic, content: newContent,
-              supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
-              owner: appOwner, sla: appSla, now }
-          );
-        }
+        await s.run(
+          `MATCH (k:Knowledge) WHERE k.id = $id
+           SET k.topic = $topic, k.content = $content,
+               k.supplier = $supplier, k.urlProd = $urlProd, k.urlQA = $urlQA,
+               k.owner = $owner, k.sla = $sla, k.glpiSyncedAt = $now`,
+          { id: kRes.records[0].get('id'), topic: appTopic, content,
+            supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
+            owner: appOwner, sla: appSla, now }
+        );
       } else {
-        const baseContent = (appDesc || appComment ? (appDesc || appComment) + '\n\n' : '') + glpiLiveBlock;
         await s.run(
           `CREATE (k:Knowledge {
              id: $id, topic: $topic, content: $content,
@@ -755,7 +795,7 @@ async function runAppStructures(ctx) {
              owner: $owner, sla: $sla, glpiSyncedAt: $now,
              tags: ['application','glpi'], createdAt: $now
            })`,
-          { id: uuid(), topic: appTopic, content: baseContent, glpiId: appId,
+          { id: uuid(), topic: appTopic, content, glpiId: appId,
             supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
             owner: appOwner, sla: appSla, now }
         );
@@ -767,28 +807,48 @@ async function runAppStructures(ctx) {
   return { count };
 }
 
-// Fetch one app's sub-items from PluginArchiswSwcomponent with a 20 s hard timeout.
-const fetchAppSub = async (baseUrl, appId, subType, sessionToken, appToken) => {
-  const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
-  const url = `${baseUrl}/apirest.php/PluginArchiswSwcomponent/${appId}/${subType}?range=0-999&expand_dropdowns=true`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
+// Fetch items linked to an app via GLPI sub-item junction (e.g. Item_Ticket → Ticket details).
+// 1. Fetches PluginArchiswSwcomponent/{id}/{subType}/ to get the linking rows.
+// 2. Extracts each item ID from the rel-link href.
+// 3. Batch-fetches the actual item records for full details.
+const fetchAppLinkedItems = async (base, appId, subType, glpiType, sessionToken, appToken) => {
+  const agent = base.startsWith('https') ? httpsAgent : undefined;
+  const hdrs  = { 'Session-Token': sessionToken, 'App-Token': appToken, 'Content-Type': 'application/json' };
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
     enforceGetOnly('GET');
-    const r = await fetch(url, {
-      method: 'GET',
-      headers: { 'Session-Token': sessionToken, 'App-Token': appToken, 'Content-Type': 'application/json' },
-      agent,
-      signal: controller.signal,
-    });
+    const linkRes = await fetch(
+      `${base}/apirest.php/PluginArchiswSwcomponent/${appId}/${subType}/?range=0-99&expand_dropdowns=true`,
+      { method: 'GET', headers: hdrs, agent, signal: ctrl.signal }
+    );
     clearTimeout(timer);
-    if (r.status !== 200 && r.status !== 206) return [];
-    const body = await r.json();
-    return Array.isArray(body) ? body : (body.data || []);
-  } catch {
-    clearTimeout(timer);
-    return [];
-  }
+    if (!linkRes.ok) return [];
+    const linkData = await linkRes.json();
+    if (!Array.isArray(linkData)) return [];
+
+    const ids = linkData.map(entry => {
+      const link = (entry.links || []).find(l => l.rel === glpiType);
+      if (!link) return null;
+      const m = link.href.match(/\/(\d+)\/?$/);
+      return m ? m[1] : null;
+    }).filter(Boolean);
+
+    if (!ids.length) return [];
+
+    const items = await Promise.all(ids.map(async itemId => {
+      try {
+        enforceGetOnly('GET');
+        const r = await fetch(
+          `${base}/apirest.php/${glpiType}/${itemId}?expand_dropdowns=true`,
+          { method: 'GET', headers: hdrs, agent }
+        );
+        if (!r.ok) return null;
+        return await r.json();
+      } catch { return null; }
+    }));
+    return items.filter(Boolean);
+  } catch { clearTimeout(timer); return []; }
 };
 
 async function runAppStructuresHistory(ctx) {
@@ -1665,12 +1725,12 @@ router.get('/app/:id/linked', async (req, res) => {
     if (!sessData.session_token) return res.status(401).json({ error: 'GLPI auth failed', detail: sessData });
     const sessionToken = sessData.session_token;
 
-    // Parallel: GLPI ticket/change fetches + Neo4j dataflow query
+    // Parallel: GLPI ticket/change fetches (via junction tables) + Neo4j dataflow query
     const [tickets, changes, dfRes] = await Promise.all([
-      fetchAppSub(base, id, 'Ticket', sessionToken, cfg.glpiAppToken)
-        .then(rows => rows.map(t => ({ id: t.id, name: t.name, status: t.status, priority: t.priority, itilcategories_id: t.itilcategories_id, date_mod: t.date_mod, date: t.date, content: t.content }))),
-      fetchAppSub(base, id, 'Change', sessionToken, cfg.glpiAppToken)
-        .then(rows => rows.map(c => ({ id: c.id, name: c.name, status: c.status, priority: c.priority, itilcategories_id: c.itilcategories_id, date_mod: c.date_mod, date: c.date, content: c.content }))),
+      fetchAppLinkedItems(base, id, 'Item_Ticket', 'Ticket', sessionToken, cfg.glpiAppToken)
+        .then(rows => rows.map(t => ({ id: t.id, name: t.name, status: t.status, priority: t.priority, itilcategories_id: t.itilcategories_id, date_mod: t.date_mod, date: t.date }))),
+      fetchAppLinkedItems(base, id, 'Item_Change', 'Change', sessionToken, cfg.glpiAppToken)
+        .then(rows => rows.map(c => ({ id: c.id, name: c.name, status: c.status, priority: c.priority, itilcategories_id: c.itilcategories_id, date_mod: c.date_mod, date: c.date }))),
       s.run(
         `MATCH (a:Application { glpiId: $id })-[:FEEDS_INTO|CONNECTS_TO]-(d:Dataflow)
          WHERE d.glpiId IS NOT NULL AND d.glpiId <> ''
