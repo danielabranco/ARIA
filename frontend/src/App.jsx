@@ -1401,6 +1401,29 @@ const ArchitectureMap = ({ api }) => {
     simRef.current.alpha = Math.max(0.001, alpha * 0.994);
   };
 
+  // ── Status → color (shared between canvas and NodePanel) ──
+  const statusColor = (status, defaultColor) => {
+    const s = (status || '').toLowerCase().trim();
+    if (!s || s === '0' || s === 'false') return defaultColor || T.textDim;
+    if (s.includes('remov') || s.includes('retir') || s.includes('delet') || s.includes('stop') ||
+        s.includes('removid') || s.includes('descontinuad') || s.includes('descom') ||
+        s.includes('end of life') || s.includes('eol') || s.includes('decommission')) return T.danger;
+    if (s.includes('deprecat') || s.includes('obsolet') || s.includes('legad') || s.includes('obsoleto')) return T.warning;
+    if (s.includes('dev') || s.includes('test') || s.includes('staging') || s.includes('pilot') ||
+        s.includes('homolog') || s.includes('qualidade') || s.includes('qa') || s.includes('validaç')) return '#F59E0B';
+    if (s.includes('active') || s.includes('in use') || s.includes('product') || s.includes('live') ||
+        s.includes('operacion') || s.includes('produção') || s.includes('producao') || s.includes('produc') ||
+        s.includes('ativo') || s.includes('activo') || s.includes('em uso') || s.includes('em prod') ||
+        s.includes('em operação') || s.includes('operational')) return T.success;
+    if (s.includes('inactive') || s.includes('disabl') || s.includes('suspend') ||
+        s.includes('inativo') || s.includes('inactivo') || s.includes('desativ') ||
+        s.includes('pausad') || s.includes('suspenso')) return T.textMuted;
+    const PALETTE = ['#8B5CF6', '#06B6D4', '#EC4899', '#14B8A6', '#F97316', '#6366F1'];
+    let hash = 0;
+    for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) & 0xFFFFFFFF;
+    return PALETTE[Math.abs(hash) % PALETTE.length];
+  };
+
   // ── Canvas render ───────────────────────────────────────
   const render = () => {
     const canvas = canvasRef.current;
@@ -1425,36 +1448,6 @@ const ArchitectureMap = ({ api }) => {
       .trim() || name;
     const decodeHTML  = s => s.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"');
     const cleanName   = name => decodeHTML(name);
-
-    // Status → color mapping
-    const statusColor = (status, defaultColor) => {
-      const s = (status || '').toLowerCase().trim();
-      if (!s || s === '0' || s === 'false') return defaultColor;
-      // Removed / retired / end-of-life (EN + PT)
-      if (s.includes('remov') || s.includes('retir') || s.includes('delet') || s.includes('stop') ||
-          s.includes('removid') || s.includes('descontinuad') || s.includes('descom') ||
-          s.includes('end of life') || s.includes('eol') || s.includes('decommission')) return T.danger;
-      // Deprecated / obsolete (EN + PT)
-      if (s.includes('deprecat') || s.includes('obsolet') || s.includes('legad') || s.includes('obsoleto')) return T.warning;
-      // Dev / test / staging (EN + PT)
-      if (s.includes('dev') || s.includes('test') || s.includes('staging') || s.includes('pilot') ||
-          s.includes('homolog') || s.includes('qualidade') || s.includes('qa') || s.includes('validaç')) return '#F59E0B';
-      // Active / in production (EN + PT)
-      if (s.includes('active') || s.includes('in use') || s.includes('product') || s.includes('live') ||
-          s.includes('operacion') || s.includes('produção') || s.includes('producao') || s.includes('produc') ||
-          s.includes('ativo') || s.includes('activo') || s.includes('em uso') || s.includes('em prod') ||
-          s.includes('em operação') || s.includes('operational')) return T.success;
-      // Inactive / disabled (EN + PT)
-      if (s.includes('inactive') || s.includes('disabl') || s.includes('suspend') ||
-          s.includes('inativo') || s.includes('inactivo') || s.includes('desativ') ||
-          s.includes('pausad') || s.includes('suspenso')) return T.textMuted;
-      // Fallback: deterministic color from palette for any unrecognized non-empty status
-      // This ensures nodes with ANY status are visually distinct from nodes with no status
-      const PALETTE = ['#8B5CF6', '#06B6D4', '#EC4899', '#14B8A6', '#F97316', '#6366F1'];
-      let hash = 0;
-      for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) & 0xFFFFFFFF;
-      return PALETTE[Math.abs(hash) % PALETTE.length];
-    };
 
     // ── Shared filter computation ───────────────────────────
     const fullNodeMap = {};
@@ -1957,12 +1950,32 @@ const ArchitectureMap = ({ api }) => {
           </div>
         )}
 
-        {fields.map(([k, v]) => (
-          <div key={k} style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>{k}</div>
-            <div style={{ fontSize: 12, color: T.textSecondary, wordBreak: 'break-all' }}>{String(v)}</div>
-          </div>
-        ))}
+        {fields.map(([k, v]) => {
+          if (k === 'Status') {
+            const sc = statusColor(String(v), T.textDim);
+            return (
+              <div key={k} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{k}</div>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: 11, fontWeight: 700,
+                  background: sc + '20', color: sc,
+                  border: `1px solid ${sc}40`,
+                  borderRadius: 6, padding: '3px 9px',
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: sc, flexShrink: 0 }} />
+                  {String(v)}
+                </span>
+              </div>
+            );
+          }
+          return (
+            <div key={k} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>{k}</div>
+              <div style={{ fontSize: 12, color: T.textSecondary, wordBreak: 'break-all' }}>{String(v)}</div>
+            </div>
+          );
+        })}
         {p.source && (
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${T.border}`, fontSize: 11, color: T.textDim }}>
             Source: <strong style={{ color: T.textMuted }}>{p.source}</strong>
