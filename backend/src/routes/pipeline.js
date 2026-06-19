@@ -32,6 +32,9 @@ const STAGES = [
   { id: 'field_change_history',      label: 'Field Change History',        tier: 'live',    desc: 'Fetch field-level change logs for open tickets (incremental)',                                                                                          endpoint: 'GET /Ticket/{id}/log {open tickets, incremental}' },
   { id: 'app_structures',            label: 'App Structures',               tier: 'nightly', desc: 'Fetch application structures — upserts Application nodes and Knowledge entries, builds appIdMap for dataflow resolution',                                      endpoint: 'GET /PluginArchiswSwcomponent {expand_dropdowns, is_deleted=0}' },
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
+  { id: 'dataflow_tickets',          label: 'Dataflow Tickets',             tier: 'hourly',  desc: 'Fetch all tickets linked to each dataflow — upserts Ticket nodes and creates HAS_TICKET relationships',                                                          endpoint: 'GET /PluginDataflowsDataflow/{id}/Ticket {all dataflows}' },
+  { id: 'dataflow_changes',          label: 'Dataflow Changes',             tier: 'hourly',  desc: 'Fetch all changes linked to each dataflow — upserts Change nodes and creates HAS_CHANGE relationships',                                                          endpoint: 'GET /PluginDataflowsDataflow/{id}/Change {all dataflows}' },
+  { id: 'dataflow_associated_apps',  label: 'Dataflow Associated Apps',     tier: 'nightly', desc: 'Fetch software components associated with each dataflow — creates ASSOCIATED_WITH relationships between Dataflow and Application nodes',                           endpoint: 'GET /PluginDataflowsDataflow/{id}/PluginArchiswSwcomponent {all dataflows}' },
 ];
 
 const TIER_ORDER = { live: 0, hourly: 1, nightly: 2, weekly: 3 };
@@ -931,6 +934,119 @@ const mapTicketFields = (item) => ({
   requester:       String(item['4']  || item.users_id_requester || ''),
 });
 
+async function runDataflowTickets(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
+  const dataflowIds = dfRes.records.map(r => r.get('id'));
+  const BATCH = 20;
+  let count = 0;
+  for (let i = 0; i < dataflowIds.length; i += BATCH) {
+    const batch = dataflowIds.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (dfId) => {
+      try {
+        const tickets = await fetchAllPages(baseUrl, `PluginDataflowsDataflow/${dfId}/Ticket?expand_dropdowns=true`, sessionToken, appToken);
+        for (const t of tickets) {
+          await s.run(
+            `MERGE (tk:Ticket { glpiId: $id })
+             SET tk.name = $name, tk.status = $status, tk.statusLabel = $statusLabel,
+                 tk.date = $date, tk.dateMod = $dateMod, tk.dateSolved = $dateSolved,
+                 tk.priority = $priority, tk.priorityLabel = $priorityLabel,
+                 tk.urgency = $urgency, tk.impact = $impact,
+                 tk.category = $category, tk.entity = $entity,
+                 tk.updatedAt = $now
+             WITH tk
+             MATCH (d:Dataflow { glpiId: $dfId })
+             MERGE (d)-[:HAS_TICKET]->(tk)`,
+            {
+              id: String(t.id), name: t.name || '',
+              status: String(t.status || ''), statusLabel: TICKET_STATUS[t.status] || '',
+              date: t.date || '', dateMod: t.date_mod || '', dateSolved: t.solvedate || '',
+              priority: String(t.priority || ''), priorityLabel: TICKET_PRIORITY[t.priority] || '',
+              urgency: String(t.urgency || ''), impact: String(t.impact || ''),
+              category: String(t.itilcategories_id || ''), entity: String(t.entities_id || ''),
+              now: new Date().toISOString(), dfId: String(dfId),
+            }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  return { count, dataflowsProcessed: dataflowIds.length };
+}
+
+async function runDataflowChanges(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
+  const dataflowIds = dfRes.records.map(r => r.get('id'));
+  const BATCH = 20;
+  let count = 0;
+  for (let i = 0; i < dataflowIds.length; i += BATCH) {
+    const batch = dataflowIds.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (dfId) => {
+      try {
+        const changes = await fetchAllPages(baseUrl, `PluginDataflowsDataflow/${dfId}/Change?expand_dropdowns=true`, sessionToken, appToken);
+        for (const c of changes) {
+          await s.run(
+            `MERGE (ch:Change { glpiId: $id })
+             SET ch.name = $name, ch.status = $status,
+                 ch.date = $date, ch.dateMod = $dateMod,
+                 ch.urgency = $urgency, ch.impact = $impact, ch.priority = $priority,
+                 ch.category = $category, ch.entity = $entity,
+                 ch.updatedAt = $now
+             WITH ch
+             MATCH (d:Dataflow { glpiId: $dfId })
+             MERGE (d)-[:HAS_CHANGE]->(ch)`,
+            {
+              id: String(c.id), name: c.name || '',
+              status: String(c.status || ''),
+              date: c.date || '', dateMod: c.date_mod || '',
+              urgency: String(c.urgency || ''), impact: String(c.impact || ''),
+              priority: String(c.priority || ''),
+              category: String(c.itilcategories_id || ''), entity: String(c.entities_id || ''),
+              now: new Date().toISOString(), dfId: String(dfId),
+            }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  return { count, dataflowsProcessed: dataflowIds.length };
+}
+
+async function runDataflowAssociatedApps(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
+  const dataflowIds = dfRes.records.map(r => r.get('id'));
+  const BATCH = 20;
+  let count = 0;
+  for (let i = 0; i < dataflowIds.length; i += BATCH) {
+    const batch = dataflowIds.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (dfId) => {
+      try {
+        const apps = await fetchAllPages(baseUrl, `PluginDataflowsDataflow/${dfId}/PluginArchiswSwcomponent?expand_dropdowns=true`, sessionToken, appToken);
+        for (const app of apps) {
+          const appName = app.name || String(app.id);
+          await s.run(
+            `MERGE (a:Application { name: $name })
+             SET a.glpiId = $id, a.updatedAt = $now
+             WITH a
+             MATCH (d:Dataflow { glpiId: $dfId })
+             MERGE (d)-[:ASSOCIATED_WITH]->(a)`,
+            {
+              name: appName, id: String(app.id),
+              now: new Date().toISOString(), dfId: String(dfId),
+            }
+          );
+          count++;
+        }
+      } catch {}
+    }));
+  }
+  return { count, dataflowsProcessed: dataflowIds.length };
+}
+
 // ── RUNNER MAP ────────────────────────────────────────────────────────────────
 
 const RUNNERS = {
@@ -955,6 +1071,9 @@ const RUNNERS = {
   field_change_history:      runFieldChangeHistory,
   app_structures:            runAppStructures,
   dataflows:                 runDataflows,
+  dataflow_tickets:          runDataflowTickets,
+  dataflow_changes:          runDataflowChanges,
+  dataflow_associated_apps:  runDataflowAssociatedApps,
 };
 
 // ── ENDPOINTS ─────────────────────────────────────────────────────────────────
