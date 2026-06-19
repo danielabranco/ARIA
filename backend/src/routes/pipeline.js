@@ -18,10 +18,6 @@ const STAGES = [
   { id: 'tickets_full',         label: 'Tickets (full reconcile)', tier: 'nightly', desc: 'Nightly full reconciliation — fetches every ticket in the 2yr window, all groups, all statuses, upserts 1:1', endpoint: 'GET /search/Ticket {2yr window, unrestricted}' },
   { id: 'user_directory',       label: 'User Directory',         tier: 'nightly', desc: 'Fetch GLPI users and group memberships — incremental (skipped if synced within 1h; manual trigger forces full re-fetch)', endpoint: 'GET /User' },
   { id: 'followup_analysis',    label: 'Followup Analysis',      tier: 'live',    desc: 'Determine last-touch author type per open ticket (pull-in-count)',                                             endpoint: 'GET /Ticket/{id}/ITILFollowup {open tickets}' },
-  { id: 'reopen_detection',     label: 'Reopen Detection',       tier: 'nightly', desc: 'Detect tickets closed more than once — incremental (new tickets only)',                                        endpoint: 'GET /Ticket/{id}/ITILSolution {closed, incremental}' },
-  { id: 'escalation_history',   label: 'Escalation History',     tier: 'nightly', desc: 'Check assignment logs for group escalations (C1k calculations)',                                               endpoint: 'GET /Ticket/{id}/Log {closed, incremental}' },
-  { id: 'task_records',         label: 'Task Records',           tier: 'live',    desc: 'Fetch ticket task records for open tickets — incremental (only re-fetches tickets whose last_update changed)', endpoint: 'GET /TicketTask {paginated}' },
-  { id: 'rescore',              label: 'Re-score',               tier: 'live',    desc: 'Compute risk scores from raw data using current weight config',                                                endpoint: 'local — no network call' },
   { id: 'change_field_discovery', label: 'Change Field Discovery', tier: 'nightly', desc: 'Discover plugin field IDs (runs once, cached in meta table)',                                               endpoint: 'GET /listSearchOptions/Change' },
   { id: 'change_records',            label: 'Change Records',              tier: 'hourly',  desc: 'Fetch Change records — incremental after first run (only re-fetches records modified since last sync, full on first run or force flag trigger)',   endpoint: 'GET /search/Change {2yr window}' },
   { id: 'release_records',           label: 'Release Records',             tier: 'hourly',  desc: 'Fetch GLPI release objects and sub-documents',                                                                                                         endpoint: 'GET /PluginReleaseRelease' },
@@ -34,7 +30,6 @@ const STAGES = [
   { id: 'solution_history',          label: 'Solution History',            tier: 'live',    desc: 'Incremental solution records for all tickets',                                                                                                          endpoint: 'GET /Ticket/{id}/ITILSolution {incremental}' },
   { id: 'validation_history',        label: 'Validation History',          tier: 'live',    desc: 'Fetch ticket and change validation records incrementally',                                                                                              endpoint: 'GET /Ticket/{id}/TicketValidation + Change/{id}/ChangeValidation {incremental}' },
   { id: 'field_change_history',      label: 'Field Change History',        tier: 'live',    desc: 'Fetch field-level change logs for open tickets (incremental)',                                                                                          endpoint: 'GET /Ticket/{id}/log {open tickets, incremental}' },
-  { id: 'knowledge_base_cache',      label: 'Knowledge Base Cache',        tier: 'live',    desc: 'Paginate and cache all GLPI knowledge base articles',                                                                                                   endpoint: 'GET /KnowledgeBase {paginated}' },
   { id: 'app_structures',            label: 'App Structures',               tier: 'nightly', desc: 'Fetch application structures — upserts Application nodes and Knowledge entries, builds appIdMap for dataflow resolution',                                      endpoint: 'GET /PluginArchiswSwcomponent {expand_dropdowns, is_deleted=0}' },
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
 ];
@@ -318,120 +313,6 @@ async function runFollowupAnalysis(ctx) {
     }));
   }
   return { count, ticketsProcessed: Math.min(ids.length, 2000) };
-}
-
-async function runReopenDetection(ctx) {
-  const { baseUrl, sessionToken, appToken, s, ticketIds, meta, force } = ctx;
-  // Incremental: only check tickets not yet analysed, or all on force/first run
-  const newTicketRes = await s.run(
-    `MATCH (t:Ticket) WHERE t.reopenChecked IS NULL OR $force = true RETURN t.glpiId AS id LIMIT 500`,
-    { force: force || false }
-  );
-  const ids = newTicketRes.records.map(r => r.get('id'));
-  const BATCH = 30;
-  let count = 0;
-  for (let i = 0; i < ids.length; i += BATCH) {
-    const batch = ids.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (tid) => {
-      try {
-        const solutions = await fetchAllPages(baseUrl, `Ticket/${tid}/ITILSolution?expand_dropdowns=true`, sessionToken, appToken);
-        const reopenCount = Math.max(0, solutions.length - 1); // >1 solution = reopened
-        await s.run(
-          `MATCH (t:Ticket { glpiId: $id }) SET t.reopenCount = $count, t.reopenChecked = $now`,
-          { id: String(tid), count: reopenCount, now: new Date().toISOString() }
-        );
-        if (solutions.length > 0) {
-          await s.run(
-            `MATCH (t:Ticket { glpiId: $ticketId })
-             MERGE (sol:TicketSolution { glpiId: $id })
-             SET sol.ticketId = $ticketId, sol.count = $count, sol.updatedAt = $now
-             MERGE (t)-[:HAS_SOLUTION]->(sol)`,
-            { id: `${tid}_sol`, ticketId: String(tid), count: solutions.length, now: new Date().toISOString() }
-          );
-        }
-        count += solutions.length;
-      } catch {}
-    }));
-  }
-  return { count, ticketsProcessed: ids.length };
-}
-
-async function runEscalationHistory(ctx) {
-  const { baseUrl, sessionToken, appToken, s, ticketIds, force } = ctx;
-  const newTicketRes = await s.run(
-    `MATCH (t:Ticket) WHERE t.escalationChecked IS NULL OR $force = true RETURN t.glpiId AS id LIMIT 500`,
-    { force: force || false }
-  );
-  const ids = newTicketRes.records.map(r => r.get('id'));
-  const BATCH = 30;
-  let count = 0;
-  for (let i = 0; i < ids.length; i += BATCH) {
-    const batch = ids.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (tid) => {
-      try {
-        const logs = await fetchAllPages(baseUrl, `Ticket/${tid}/Log?expand_dropdowns=true`, sessionToken, appToken);
-        let escalationCount = 0;
-        for (const log of logs) {
-          // Detect group reassignment (field 8 = assigned group in GLPI logs)
-          if (log.field === 'Group' || log.field === '8' || String(log.itemtype_link) === 'Group') {
-            escalationCount++;
-            await s.run(
-              `MERGE (l:TicketLog { glpiId: $id })
-               SET l.ticketId = $ticketId, l.date = $date, l.field = $field,
-                   l.oldValue = $oldValue, l.newValue = $newValue, l.updatedAt = $now
-               WITH l MATCH (t:Ticket { glpiId: $ticketId })
-               MERGE (t)-[:HAS_LOG]->(l)`,
-              {
-                id: String(log.id), ticketId: String(tid), date: log.date_mod || '',
-                field: String(log.field || ''), oldValue: String(log.old_value || ''),
-                newValue: String(log.new_value || ''), now: new Date().toISOString()
-              }
-            );
-            count++;
-          }
-        }
-        await s.run(
-          `MATCH (t:Ticket { glpiId: $id }) SET t.escalationCount = $count, t.escalationChecked = $now`,
-          { id: String(tid), count: escalationCount, now: new Date().toISOString() }
-        );
-      } catch {}
-    }));
-  }
-  return { count, ticketsProcessed: ids.length };
-}
-
-async function runTaskRecords(ctx) {
-  const { baseUrl, sessionToken, appToken, s } = ctx;
-  const tasks = await fetchAllPages(baseUrl, 'TicketTask?expand_dropdowns=true', sessionToken, appToken);
-  let count = 0;
-  for (const t of tasks) {
-    await s.run(
-      `MERGE (tk:TicketTask { glpiId: $id })
-       SET tk.ticketId = $ticketId, tk.content = $content, tk.state = $state,
-           tk.date = $date, tk.userId = $userId, tk.duration = $duration, tk.updatedAt = $now
-       WITH tk MATCH (t:Ticket { glpiId: $ticketId })
-       MERGE (t)-[:HAS_TASK]->(tk)`,
-      {
-        id: String(t.id), ticketId: String(t.tickets_id || ''),
-        content: (t.content || '').substring(0, 500), state: String(t.state || ''),
-        date: t.date || '', userId: String(t.users_id_tech || t.users_id || ''),
-        duration: String(t.actiontime || '0'), now: new Date().toISOString()
-      }
-    );
-    count++;
-  }
-  return { count };
-}
-
-async function runRescore(ctx) {
-  const { s } = ctx;
-  // Compute a simple risk score per ticket: priority × urgency × (1 + reopenCount)
-  const r = await s.run(
-    `MATCH (t:Ticket)
-     SET t.riskScore = toFloat(coalesce(t.priority, '3')) * toFloat(coalesce(t.urgency, '3')) * (1 + coalesce(t.reopenCount, 0))
-     RETURN count(t) AS c`
-  );
-  return { count: r.records[0]?.get('c').toNumber() || 0 };
 }
 
 async function runChangeFieldDiscovery(ctx) {
@@ -1002,25 +883,6 @@ async function runDataflows(ctx) {
   return { count };
 }
 
-async function runKnowledgeBaseCache(ctx) {
-  const { baseUrl, sessionToken, appToken, s } = ctx;
-  const items = await fetchAllPages(baseUrl, 'KnowledgeBase?expand_dropdowns=true', sessionToken, appToken);
-  let count = 0;
-  for (const item of items) {
-    await s.run(
-      `MERGE (kb:KnowledgeBase { glpiId: $id })
-       SET kb.name = $name, kb.content = $content, kb.category = $category, kb.updatedAt = $now`,
-      {
-        id: String(item.id), name: item.name || '',
-        content: (item.answer || item.content || '').substring(0, 1000),
-        category: String(item.knowbaseitemcategories_id || ''), now: new Date().toISOString()
-      }
-    );
-    count++;
-  }
-  return { count };
-}
-
 // ── KILL SESSION ──────────────────────────────────────────────────────────────
 
 const killSession = async (baseUrl, sessionToken, appToken) => {
@@ -1078,11 +940,7 @@ const RUNNERS = {
   tickets_incremental:   runTicketsIncremental,
   tickets_full:          runTicketsFull,
   user_directory:        runUserDirectory,
-  followup_analysis:     runFollowupAnalysis,
-  reopen_detection:      runReopenDetection,
-  escalation_history:    runEscalationHistory,
-  task_records:          runTaskRecords,
-  rescore:               runRescore,
+  followup_analysis:         runFollowupAnalysis,
   change_field_discovery:    runChangeFieldDiscovery,
   change_records:            runChangeRecords,
   release_records:           runReleaseRecords,
@@ -1095,7 +953,6 @@ const RUNNERS = {
   solution_history:          runSolutionHistory,
   validation_history:        runValidationHistory,
   field_change_history:      runFieldChangeHistory,
-  knowledge_base_cache:      runKnowledgeBaseCache,
   app_structures:            runAppStructures,
   dataflows:                 runDataflows,
 };
