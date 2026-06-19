@@ -31,6 +31,8 @@ const STAGES = [
   { id: 'validation_history',        label: 'Validation History',          tier: 'live',    desc: 'Fetch ticket and change validation records incrementally',                                                                                              endpoint: 'GET /Ticket/{id}/TicketValidation + Change/{id}/ChangeValidation {incremental}' },
   { id: 'field_change_history',      label: 'Field Change History',        tier: 'live',    desc: 'Fetch field-level change logs for open tickets (incremental)',                                                                                          endpoint: 'GET /Ticket/{id}/log {open tickets, incremental}' },
   { id: 'app_structures',            label: 'App Structures',               tier: 'nightly', desc: 'Fetch application structures — upserts Application nodes and Knowledge entries, builds appIdMap for dataflow resolution',                                      endpoint: 'GET /PluginArchiswSwcomponent {expand_dropdowns, is_deleted=0}' },
+  { id: 'dataflow_lookups',          label: 'Dataflow Lookups',             tier: 'weekly',  desc: 'Fetch GLPI dataflow dropdown tables (holiday actions / data classification, states, types, protocols) and upsert as DataflowLookup nodes for meaning resolution', endpoint: 'GET /PluginDataflowsHolidayAction + States + Types + Protocols' },
+  { id: 'dataflow_history',          label: 'Dataflow History',             tier: 'nightly', desc: 'Fetch field-change logs for all dataflows — stores DataflowLog nodes, updates lastActivity and lastEditor on each Dataflow node (incremental by log ID)',        endpoint: 'GET /PluginDataflowsDataflow/{id}/Log {all dataflows, incremental}' },
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
   { id: 'dataflow_tickets',         label: 'Dataflow Tickets',             tier: 'hourly',  desc: 'Fetch all tickets linked to each dataflow — upserts Ticket nodes and creates HAS_TICKET relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Ticket {all dataflows}' },
   { id: 'dataflow_changes',         label: 'Dataflow Changes',             tier: 'hourly',  desc: 'Fetch all changes linked to each dataflow — upserts Change nodes and creates HAS_CHANGE relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Change {all dataflows}' },
@@ -764,6 +766,145 @@ async function runAppStructures(ctx) {
   return { count };
 }
 
+async function runDataflowHistory(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const now = new Date().toISOString();
+
+  // Load all dataflows with their last-seen log ID for incremental sync
+  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id, coalesce(d.lastLogId, '0') AS lastLogId`);
+  const dataflows = dfRes.records.map(r => ({ id: r.get('id'), lastLogId: parseInt(r.get('lastLogId'), 10) || 0 }));
+
+  const BATCH = 10;
+  let count = 0;
+
+  for (let i = 0; i < dataflows.length; i += BATCH) {
+    const batch = dataflows.slice(i, i + BATCH);
+
+    // Parallel GLPI fetches with per-request timeout
+    const fetched = await Promise.all(
+      batch.map(async ({ id, lastLogId }) => {
+        const logs = await fetchDataflowSub(baseUrl, id, 'Log', sessionToken, appToken);
+        // fetchDataflowSub uses range=0-999 — filter to only new entries
+        const newLogs = logs.filter(l => l.id > lastLogId);
+        return { id, newLogs };
+      })
+    );
+
+    // Sequential Neo4j writes
+    for (const { id, newLogs } of fetched) {
+      if (!newLogs.length) continue;
+
+      for (const log of newLogs) {
+        try {
+          await s.run(
+            `MERGE (l:DataflowLog { glpiId: $logId })
+             SET l.dataflowId  = $dfId,
+                 l.action      = $action,
+                 l.user        = $user,
+                 l.date        = $date,
+                 l.fieldOption = $fieldOpt,
+                 l.oldValue    = $old,
+                 l.newValue    = $new,
+                 l.updatedAt   = $now
+             WITH l
+             MATCH (d:Dataflow { glpiId: $dfId })
+             MERGE (d)-[:HAS_LOG]->(l)`,
+            {
+              logId:    String(log.id),
+              dfId:     String(id),
+              action:   String(log.linked_action ?? ''),
+              user:     String(log.user_name || ''),
+              date:     String(log.date_mod || ''),
+              fieldOpt: String(log.id_search_option ?? ''),
+              old:      String(log.old_value || ''),
+              new:      String(log.new_value || ''),
+              now,
+            }
+          );
+          count++;
+        } catch {}
+      }
+
+      // Update lastActivity, lastEditor and lastLogId on the Dataflow node
+      const latest = newLogs.reduce((a, b) => (a.id > b.id ? a : b));
+      try {
+        await s.run(
+          `MATCH (d:Dataflow { glpiId: $dfId })
+           SET d.lastActivity = $date,
+               d.lastEditor   = $user,
+               d.lastLogId    = $logId`,
+          {
+            dfId:  String(id),
+            date:  String(latest.date_mod || ''),
+            user:  String(latest.user_name || ''),
+            logId: String(latest.id),
+          }
+        );
+      } catch {}
+    }
+  }
+
+  return { count, dataflowsProcessed: dataflows.length };
+}
+
+async function runDataflowLookups(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+
+  // Each entry: { glpiEndpoint, table } — we store every row as a DataflowLookup node
+  const LOOKUP_TABLES = [
+    { endpoint: 'PluginDataflowsHolidayAction', table: 'holiday_action' },
+    { endpoint: 'PluginDataflowsState',         table: 'state'          },
+    { endpoint: 'PluginDataflowsType',          table: 'type'           },
+    { endpoint: 'PluginDataflowsTransferProtocol', table: 'protocol'    },
+    { endpoint: 'PluginDataflowsTransferFreq',  table: 'frequency'      },
+    { endpoint: 'PluginDataflowsPattern',       table: 'pattern'        },
+    { endpoint: 'PluginDataflowsMode',          table: 'mode'           },
+    { endpoint: 'PluginDataflowsTriggerType',   table: 'trigger_type'   },
+    { endpoint: 'PluginDataflowsFlowgroup',     table: 'flow_group'     },
+    { endpoint: 'PluginDataflowsIndicator',     table: 'indicator'      },
+  ];
+
+  let count = 0;
+  const now = new Date().toISOString();
+
+  for (const { endpoint, table } of LOOKUP_TABLES) {
+    try {
+      const rows = await fetchAllPages(baseUrl, `${endpoint}?range=0-999`, sessionToken, appToken);
+      for (const row of rows) {
+        if (!row.id) continue;
+        // "meaning" = comment if present, else name
+        // For GDPR / holiday_action table: prefix with risk indicator
+        const GDPR_PREFIX = {
+          'Customer Confidential Data':       '🔴 Customer Confidential Data',
+          'Indirect Customer Identification': '🟡 Indirect Customer Identification',
+          'Nonidentifiable/ anonymous data':  '🟢 Nonidentifiable / anonymous data',
+        };
+        const rawMeaning = (row.comment || '').trim() || row.name || '';
+        const meaning = table === 'holiday_action' ? (GDPR_PREFIX[rawMeaning] || rawMeaning) : rawMeaning;
+        await s.run(
+          `MERGE (l:DataflowLookup { table: $table, glpiId: $glpiId })
+           SET l.name    = $name,
+               l.meaning = $meaning,
+               l.updatedAt = $now`,
+          { table, glpiId: String(row.id), name: row.name || '', meaning, now }
+        );
+        count++;
+      }
+    } catch {}
+  }
+
+  // Cache the full lookup map on ctx so runDataflows can use it without extra DB calls
+  const lRes = await s.run(`MATCH (l:DataflowLookup) RETURN l.table AS t, l.glpiId AS id, l.name AS name, l.meaning AS meaning`);
+  ctx.lookupMap = {};
+  for (const rec of lRes.records) {
+    const t = rec.get('t');
+    if (!ctx.lookupMap[t]) ctx.lookupMap[t] = new Map();
+    ctx.lookupMap[t].set(rec.get('id'), { name: rec.get('name'), meaning: rec.get('meaning') });
+  }
+
+  return { count };
+}
+
 async function runDataflows(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
   const INACTIVE = ['removed', 'stopped', 'inactive', 'deleted'];
@@ -783,6 +924,37 @@ async function runDataflows(ctx) {
     return /^\d+$/.test(v) ? (ctx.appIdMap.get(v) || v) : v;
   };
 
+  // Load lookup map from Neo4j if dataflow_lookups stage didn't already populate it
+  if (!ctx.lookupMap) {
+    ctx.lookupMap = {};
+    try {
+      const lRes = await s.run(`MATCH (l:DataflowLookup) RETURN l.table AS t, l.glpiId AS id, l.name AS name, l.meaning AS meaning`);
+      for (const rec of lRes.records) {
+        const t = rec.get('t');
+        if (!ctx.lookupMap[t]) ctx.lookupMap[t] = new Map();
+        ctx.lookupMap[t].set(rec.get('id'), { name: rec.get('name'), meaning: rec.get('meaning') });
+      }
+    } catch {}
+  }
+
+  const resolveLookup = (table, val) => {
+    if (!val || val === '0') return '';
+    const v = String(val);
+    // val may be numeric id or already the label string (when expand_dropdowns=true resolves it)
+    if (/^\d+$/.test(v)) {
+      const entry = ctx.lookupMap[table]?.get(v);
+      return entry ? (entry.meaning || entry.name) : v;
+    }
+    // val is already a label — try to find it by name and return meaning
+    const map = ctx.lookupMap[table];
+    if (map) {
+      for (const entry of map.values()) {
+        if (entry.name === v) return entry.meaning || v;
+      }
+    }
+    return v;
+  };
+
   const items = await fetchAllPages(baseUrl, 'PluginDataflowsDataflow?expand_dropdowns=true', sessionToken, appToken);
   let count = 0;
 
@@ -790,18 +962,19 @@ async function runDataflows(ctx) {
     const rawStatus = String(item.plugin_dataflows_states_id || '').toLowerCase();
     if (INACTIVE.some(s => rawStatus.includes(s))) continue;
 
-    const dfId         = String(item.id);
-    const dfName       = item.name || dfId;
-    const dfStatusRaw  = String(item.plugin_dataflows_states_id || '');
-    const dfComplexity = String(item.plugin_dataflows_types_id || '');
-    const dfProtocol   = String(item.plugin_dataflows_transferprotocols_id || '');
-    const dfFlowGroup  = String(item.plugin_dataflows_flowgroups_id || '');
-    const dfDesc       = item.shortdescription || '';
-    const src          = resolveApp(item.plugin_dataflows_fromswcomponents_id);
-    const dst          = resolveApp(item.plugin_dataflows_toswcomponents_id);
-    const now          = new Date().toISOString();
+    const dfId              = String(item.id);
+    const dfName            = item.name || dfId;
+    const dfStatusRaw       = String(item.plugin_dataflows_states_id || '');
+    const dfComplexity      = String(item.plugin_dataflows_types_id || '');
+    const dfProtocol        = String(item.plugin_dataflows_transferprotocols_id || '');
+    const dfFlowGroup       = String(item.plugin_dataflows_flowgroups_id || '');
+    const dfDesc            = item.shortdescription || '';
+    const dfDataClass       = resolveLookup('holiday_action', item.plugin_dataflows_holidayactions_id);
+    const src               = resolveApp(item.plugin_dataflows_fromswcomponents_id);
+    const dst               = resolveApp(item.plugin_dataflows_toswcomponents_id);
+    const now               = new Date().toISOString();
 
-    await s.run(
+    const mergeRes = await s.run(
       `MERGE (d:Dataflow { glpiId: $id })
        SET d.name = $name, d.status = $status, d.complexity = $complexity,
            d.protocol = $protocol, d.flowGroup = $flowGroup,
@@ -810,7 +983,10 @@ async function runDataflows(ctx) {
            d.owner = $owner, d.group = $grp,
            d.indicator = $indicator, d.mappingDoc = $mDoc,
            d.technicalDoc = $tDoc, d.description = $desc,
-           d.updatedAt = $now`,
+           d.dataClassification = $dataClass,
+           d.updatedAt = $now
+       RETURN coalesce(d.lastActivity, '') AS lastActivity,
+              coalesce(d.lastEditor,   '') AS lastEditor`,
       {
         id: dfId, name: dfName, status: dfStatusRaw,
         complexity: dfComplexity, protocol: dfProtocol, flowGroup: dfFlowGroup,
@@ -819,23 +995,70 @@ async function runDataflows(ctx) {
         src, dst, owner: String(item.users_id || ''), grp: String(item.groups_id || ''),
         indicator: String(item.plugin_dataflows_indicators_id || ''),
         mDoc: item.mappingdocurl || '', tDoc: item.technicaldocurl || '',
-        desc: dfDesc, now,
+        desc: dfDesc, dataClass: dfDataClass, now,
       }
     );
+    const dfLastActivity = mergeRes.records[0]?.get('lastActivity') || '';
+    const dfLastEditor   = mergeRes.records[0]?.get('lastEditor')   || '';
 
-    // Knowledge upsert — mirrors sync.js dataflows block exactly
+    // Knowledge upsert — full table format
     try {
       const dfTopic = `Dataflow #${dfId} — ${dfName}`;
+
+      const generalRows = [
+        `| GLPI ID | ${dfId} |`,
+        `| Name | ${dfName.replace(/\|/g, '—')} |`,
+        dfStatusRaw  ? `| Status | ${dfStatusRaw} |`                         : '',
+        dfFlowGroup  ? `| Flow Group | ${dfFlowGroup} |`                      : '',
+        dfDataClass  ? `| GDPR Level | ${dfDataClass} |`                      : '',
+        String(item.plugin_dataflows_indicators_id || '') ? `| Indicator | ${item.plugin_dataflows_indicators_id} |` : '',
+        (item.date_mod || '') ? `| Last Modified | ${String(item.date_mod).substring(0, 10)} |` : '',
+        dfLastActivity ? `| Last Activity | ${dfLastActivity.substring(0, 10)} |`               : '',
+        dfLastEditor   ? `| Last Editor | ${dfLastEditor} |`                                     : '',
+        `| Last Synced | ${now.split('T')[0]} |`,
+      ].filter(Boolean).join('\n');
+
+      const flowRows = [
+        src ? `| From | ${src} |` : '',
+        dst ? `| To | ${dst} |`   : '',
+        String(item.plugin_dataflows_fromauthtypes_id  || '') ? `| From Auth | ${item.plugin_dataflows_fromauthtypes_id} |`  : '',
+        String(item.plugin_dataflows_toauthtypes_id    || '') ? `| To Auth | ${item.plugin_dataflows_toauthtypes_id} |`      : '',
+        item.plugin_dataflows_fromexternal ? `| From External URL | ${item.plugin_dataflows_fromexternal} |` : '',
+      ].filter(Boolean).join('\n');
+
+      const techRows = [
+        dfComplexity ? `| Complexity | ${dfComplexity} |`                                         : '',
+        dfProtocol   ? `| Protocol | ${dfProtocol} |`                                             : '',
+        String(item.plugin_dataflows_patterns_id        || '') ? `| Pattern | ${item.plugin_dataflows_patterns_id} |`         : '',
+        String(item.plugin_dataflows_modes_id           || '') ? `| Mode | ${item.plugin_dataflows_modes_id} |`               : '',
+        String(item.plugin_dataflows_triggertypes_id    || '') ? `| Trigger | ${item.plugin_dataflows_triggertypes_id} |`     : '',
+        String(item.plugin_dataflows_transferfreqs_id   || '') ? `| Frequency | ${item.plugin_dataflows_transferfreqs_id} |`  : '',
+        String(item.plugin_dataflows_errorhandlings_id  || '') ? `| Error Handling | ${item.plugin_dataflows_errorhandlings_id} |` : '',
+        String(item.plugin_dataflows_sourceconnectors_id || '') ? `| Source Connector | ${item.plugin_dataflows_sourceconnectors_id} |` : '',
+      ].filter(Boolean).join('\n');
+
+      const ownerRows = [
+        String(item.users_id  || '') ? `| Owner | ${item.users_id} |`         : '',
+        String(item.groups_id || '') ? `| Group | ${item.groups_id} |`         : '',
+        String(item.plugin_dataflows_supportgroups_id || '') ? `| Support Group | ${item.plugin_dataflows_supportgroups_id} |` : '',
+      ].filter(Boolean).join('\n');
+
+      const docRows = [
+        item.mappingdocurl  ? `| Mapping Doc | ${item.mappingdocurl} |`   : '',
+        item.technicaldocurl ? `| Technical Doc | ${item.technicaldocurl} |` : '',
+      ].filter(Boolean).join('\n');
+
       const dfContent = [
-        dfDesc || dfName, '',
-        'GLPI LIVE DATA (auto-updated by sync):',
-        `GLPI ID: ${dfId}`,
-        `From: ${src || 'unknown'} -> To: ${dst || 'unknown'}`,
-        dfStatusRaw  ? `Status: ${dfStatusRaw}`     : '',
-        dfComplexity ? `Complexity: ${dfComplexity}` : '',
-        dfProtocol   ? `Protocol: ${dfProtocol}`     : '',
-        dfFlowGroup  ? `Flow Group: ${dfFlowGroup}`  : '',
-        `Last synced: ${now.split('T')[0]}`,
+        `## Dataflow #${dfId} — ${dfName.replace(/\|/g, '—')}`,
+        dfDesc ? `\n> ${dfDesc.replace(/\r?\n/g, ' ').substring(0, 200)}` : '',
+        '\n### General',
+        '| Field | Value |',
+        '|---|---|',
+        generalRows,
+        flowRows ? '\n### Flow\n| Field | Value |\n|---|---|\n' + flowRows : '',
+        techRows ? '\n### Technical\n| Field | Value |\n|---|---|\n' + techRows : '',
+        ownerRows ? '\n### Ownership\n| Field | Value |\n|---|---|\n' + ownerRows : '',
+        docRows   ? '\n### Documentation\n| Field | Value |\n|---|---|\n' + docRows : '',
       ].filter(Boolean).join('\n');
 
       const kRes = await s.run(
@@ -1123,6 +1346,8 @@ const RUNNERS = {
   validation_history:        runValidationHistory,
   field_change_history:      runFieldChangeHistory,
   app_structures:            runAppStructures,
+  dataflow_history:          runDataflowHistory,
+  dataflow_lookups:          runDataflowLookups,
   dataflows:                 runDataflows,
   dataflow_tickets:          runDataflowTickets,
   dataflow_changes:          runDataflowChanges,
@@ -1151,6 +1376,43 @@ router.post('/abort', async (req, res) => {
 
 // GET /api/pipeline/stages — list all stage definitions
 router.get('/stages', (req, res) => res.json({ stages: STAGES }));
+
+// GET /api/pipeline/dataflow/:glpiId/linked — tickets, changes, apps linked via graph relationships
+router.get('/dataflow/:glpiId/linked', async (req, res) => {
+  const { glpiId } = req.params;
+  const s = driver.session();
+  try {
+    const [tRes, cRes, aRes] = await Promise.all([
+      s.run(
+        `MATCH (d:Dataflow { glpiId: $id })-[:HAS_TICKET]->(t:Ticket)
+         RETURN t.glpiId AS id, t.name AS name, t.statusLabel AS status,
+                t.priorityLabel AS priority, t.dateMod AS dateMod
+         ORDER BY t.dateMod DESC LIMIT 20`,
+        { id: glpiId }
+      ),
+      s.run(
+        `MATCH (d:Dataflow { glpiId: $id })-[:HAS_CHANGE]->(c:Change)
+         RETURN c.glpiId AS id, c.name AS name, c.status AS status,
+                c.priority AS priority, c.dateMod AS dateMod
+         ORDER BY c.dateMod DESC LIMIT 20`,
+        { id: glpiId }
+      ),
+      s.run(
+        `MATCH (d:Dataflow { glpiId: $id })-[:ASSOCIATED_WITH]->(a:Application)
+         RETURN a.glpiId AS id, a.name AS name
+         ORDER BY a.name`,
+        { id: glpiId }
+      ),
+    ]);
+    const toObj = (rec, keys) => Object.fromEntries(keys.map(k => [k, rec.get(k)]));
+    res.json({
+      tickets:  tRes.records.map(r => toObj(r, ['id','name','status','priority','dateMod'])),
+      changes:  cRes.records.map(r => toObj(r, ['id','name','status','priority','dateMod'])),
+      apps:     aRes.records.map(r => toObj(r, ['id','name'])),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { await s.close(); }
+});
 
 // GET /api/pipeline/status — current pipeline state (stage metadata + store stats)
 router.get('/status', async (req, res) => {
