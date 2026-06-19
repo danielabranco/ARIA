@@ -112,7 +112,7 @@ router.post('/glpi', async (req, res) => {
               if (tf.activeOnly !== false && INACTIVE_DATAFLOW_STATUSES.some(s => dfStatus.includes(s))) continue;
             }
             if (type === 'appstructs') {
-              const appStatus = String(item.states_id || '').toLowerCase();
+              const appStatus = String(item.plugin_archisw_swcomponentstates_id || '').toLowerCase();
               if (tf.activeOnly !== false && INACTIVE_APP_STATUSES.some(s => appStatus.includes(s))) continue;
             }
             // Status filter for tickets/changes (numeric status values)
@@ -226,7 +226,7 @@ router.post('/glpi', async (req, res) => {
               const appEntity = String(item.entities_id || '');
               const appDesc = item.shortdescription || item.description || '';
               const appComment = item.comment || '';
-              const appStatus   = String(item.states_id || '');
+              const appStatus   = String(item.plugin_archisw_swcomponentstates_id || '');
               const appSupplier = String(item.suppliers_id || '');
               const appUrlProd  = item.url_prod || '';
               const appUrlQA    = item.url_qa || '';
