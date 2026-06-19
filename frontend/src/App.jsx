@@ -38,7 +38,11 @@ function KnowledgeMarkdown({ content = "" }) {
           <tbody>
             {body.map((row, ri) => (
               <tr key={ri} style={{ background: ri % 2 === 0 ? "transparent" : T.bgElevated }}>
-                {parseRow(row).map((cell, ci) => <td key={ci} style={{ padding: "5px 10px", color: T.textSecondary, borderBottom: `1px solid ${T.border}22`, wordBreak: "break-all" }}>{cell}</td>)}
+                {parseRow(row).map((cell, ci) => {
+                  const lm = cell.match(/^\[(.+?)\]\((.+?)\)$/);
+                  const cellContent = lm ? <a href={lm[2]} target="_blank" rel="noopener noreferrer" style={{ color: T.accent, textDecoration: "none" }}>{lm[1]}</a> : cell;
+                  return <td key={ci} style={{ padding: "5px 10px", color: T.textSecondary, borderBottom: `1px solid ${T.border}22`, wordBreak: "break-all" }}>{cellContent}</td>;
+                })}
               </tr>
             ))}
           </tbody>
@@ -450,18 +454,30 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
   const appId = entry.category !== "dataflow" ? entry.glpiId : null;
 
   useEffect(() => {
-    if (!dfId) return;
-    setLoadingGlpi(true);
+    setGlpiData(null);
     setGlpiError(null);
-    api.get(`/api/pipeline/dataflow/${dfId}/linked`)
-      .then(d => setGlpiData({
-        tickets:        d.tickets  || [],
-        changes:        d.changes  || [],
-        problems:       [],
-        associatedItems: d.apps    || [],
-      }))
-      .catch(e => setGlpiError(e.message))
-      .finally(() => setLoadingGlpi(false));
+    if (dfId) {
+      setLoadingGlpi(true);
+      api.get(`/api/pipeline/dataflow/${dfId}/linked`)
+        .then(d => setGlpiData({
+          tickets:        d.tickets  || [],
+          changes:        d.changes  || [],
+          problems:       [],
+          associatedItems: d.apps    || [],
+        }))
+        .catch(e => setGlpiError(e.message))
+        .finally(() => setLoadingGlpi(false));
+    } else if (appId) {
+      setLoadingGlpi(true);
+      api.get(`/api/pipeline/app/${appId}/linked`)
+        .then(d => setGlpiData({
+          tickets:   d.tickets   || [],
+          changes:   d.changes   || [],
+          dataflows: d.dataflows || [],
+        }))
+        .catch(e => setGlpiError(e.message))
+        .finally(() => setLoadingGlpi(false));
+    }
   }, [entry.id]);
 
   const rs       = entry.reviewStatus || "pending";
@@ -469,6 +485,34 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
   const catColor = CAT_COLORS[entry.category] || T.accent;
 
   const GlpiRow = ({ item, type }) => {
+    // Dataflow row — for application-linked dataflows
+    if (type === "dataflow") {
+      const link = glpiUrl ? `${glpiUrl}/marketplace/dataflows/front/dataflow.form.php?id=${item.id}` : null;
+      const sLow = (item.status || '').toLowerCase();
+      const statusColor = sLow.includes('activ') || sLow.includes('use') ? T.success : sLow.includes('remov') || sLow.includes('stop') ? T.danger : T.textMuted;
+      return (
+        <div style={{ padding: "12px 16px", borderRadius: T.radiusSm, background: T.bgElevated, border: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10, color: T.textDim, fontWeight: 600 }}>#{item.id}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{item.name || `Dataflow #${item.id}`}</span>
+              {item.status && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${statusColor}20`, color: statusColor, border: `1px solid ${statusColor}40` }}>{item.status}</span>}
+            </div>
+            {item.desc && (
+              <div style={{ marginTop: 5, fontSize: 11, color: T.textMuted, lineHeight: 1.5 }}>
+                {item.desc.substring(0, 180)}
+              </div>
+            )}
+          </div>
+          {link && (
+            <a href={link} target="_blank" rel="noreferrer" style={{ color: T.accent, display: "flex", alignItems: "center", flexShrink: 0, padding: 4 }}>
+              <Icon name="link2" size={14} color={T.accent} />
+            </a>
+          )}
+        </div>
+      );
+    }
+
     // Associated items (software components) have different fields
     if (type === "assoc") {
       const link = glpiUrl ? `${glpiUrl}/marketplace/archisw/front/swcomponent.form.php?id=${item.id}` : null;
@@ -536,11 +580,15 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
     );
   };
 
-  const TABS = [
+  const TABS = dfId ? [
     { id: "changes",  label: "Changes",          icon: "refresh",  type: "change",  data: glpiData?.changes        },
     { id: "tickets",  label: "Tickets",           icon: "ticket",   type: "ticket",  data: glpiData?.tickets        },
     { id: "problems", label: "Problems",          icon: "warning",  type: "problem", data: glpiData?.problems       },
     { id: "assoc",    label: "Associated Items",  icon: "monitor",  type: "assoc",   data: glpiData?.associatedItems },
+  ] : [
+    { id: "tickets",   label: "Tickets",   icon: "ticket",   type: "ticket",    data: glpiData?.tickets   },
+    { id: "changes",   label: "Changes",   icon: "refresh",  type: "change",    data: glpiData?.changes   },
+    { id: "dataflows", label: "Dataflows", icon: "network",  type: "dataflow",  data: glpiData?.dataflows },
   ];
 
   return (
@@ -590,10 +638,11 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
                 {entry.tags.map(t => <span key={t} style={{ fontSize: 10, background: T.border, color: T.textMuted, borderRadius: 4, padding: "2px 7px" }}>{t}</span>)}
               </div>
             )}
-            <div style={{ marginTop: 10, display: "flex", gap: 16 }}>
-              {entry.createdAt && <span style={{ fontSize: 11, color: T.textDim }}>Created: {entry.createdAt.substring(0, 10)}</span>}
-              {entry.updatedAt && <span style={{ fontSize: 11, color: T.textDim }}>Updated: {entry.updatedAt.substring(0, 10)}</span>}
-            </div>
+            {(entry.updatedAt || entry.glpiSyncedAt) && (
+              <div style={{ marginTop: 10 }}>
+                <span style={{ fontSize: 11, color: T.textDim }}>Updated: {(entry.updatedAt || entry.glpiSyncedAt).substring(0, 10)}</span>
+              </div>
+            )}
           </div>
 
           {/* Review status row */}
@@ -615,8 +664,8 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onEdit, onReviewChange, CAT
               {glpiError && <span style={{ fontSize: 11, color: T.danger }}>Error: {glpiError}</span>}
             </div>
 
-            {!dfId ? (
-              <div style={{ fontSize: 13, color: T.textDim, padding: "24px 0" }}>No dataflow linked to this entry.</div>
+            {(!dfId && !appId) ? (
+              <div style={{ fontSize: 13, color: T.textDim, padding: "24px 0" }}>No GLPI item linked to this entry.</div>
             ) : (
               <>
                 {/* Tab bar */}

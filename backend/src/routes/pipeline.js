@@ -32,6 +32,8 @@ const STAGES = [
   { id: 'field_change_history',      label: 'Field Change History',        tier: 'live',    desc: 'Fetch field-level change logs for open tickets (incremental)',                                                                                          endpoint: 'GET /Ticket/{id}/log {open tickets, incremental}' },
   { id: 'app_structures',            label: 'App Structures',               tier: 'nightly', desc: 'Fetch application structures — upserts Application nodes and Knowledge entries, builds appIdMap for dataflow resolution',                                      endpoint: 'GET /PluginArchiswSwcomponent {expand_dropdowns, is_deleted=0}' },
   { id: 'app_structures_history',    label: 'App Structures History',       tier: 'nightly', desc: 'Fetch field-change logs for all application nodes — stores AppLog nodes, updates lastActivity and lastEditor on each Application node (incremental by log ID)',      endpoint: 'GET /PluginArchiswSwcomponent/{id}/Log {all apps, incremental}' },
+  { id: 'dataflow_lookups',          label: 'Dataflow Lookups',             tier: 'weekly',  desc: 'Fetch GLPI dataflow dropdown tables (GDPR/holiday actions, states, types, protocols, etc.) — upserts DataflowLookup nodes used by the dataflows stage for meaning resolution', endpoint: 'GET /PluginDataflowsHolidayAction + States + Types + Protocols (10 tables)' },
+  { id: 'dataflow_history',          label: 'Dataflow History',             tier: 'nightly', desc: 'Fetch field-change logs for all dataflows — stores DataflowLog nodes with HAS_LOG rels, updates lastActivity/lastEditor/lastLogId on each Dataflow node (incremental by log ID)', endpoint: 'GET /PluginDataflowsDataflow/{id}/Log {all dataflows, incremental}' },
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
   { id: 'dataflow_tickets',         label: 'Dataflow Tickets',             tier: 'hourly',  desc: 'Fetch all tickets linked to each dataflow — upserts Ticket nodes and creates HAS_TICKET relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Ticket {all dataflows}' },
   { id: 'dataflow_changes',         label: 'Dataflow Changes',             tier: 'hourly',  desc: 'Fetch all changes linked to each dataflow — upserts Change nodes and creates HAS_CHANGE relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Change {all dataflows}' },
@@ -867,9 +869,133 @@ async function runAppStructuresHistory(ctx) {
   return { count, appsProcessed: apps.length };
 }
 
+// ── DATAFLOW LOOKUP HELPERS ───────────────────────────────────────────────────
+
+async function runDataflowLookups(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const LOOKUP_TABLES = [
+    { endpoint: 'PluginDataflowsHolidayAction',         table: 'holiday_action' },
+    { endpoint: 'PluginDataflowsState',                  table: 'state' },
+    { endpoint: 'PluginDataflowsType',                   table: 'type' },
+    { endpoint: 'PluginDataflowsTransferProtocol',       table: 'transferprotocol' },
+    { endpoint: 'PluginDataflowsTriggerType',            table: 'triggertype' },
+    { endpoint: 'PluginDataflowsTransferFreq',           table: 'transferfreq' },
+    { endpoint: 'PluginDataflowsTransferPattern',        table: 'transferpattern' },
+    { endpoint: 'PluginDataflowsTransferMode',           table: 'transfermode' },
+    { endpoint: 'PluginDataflowsErrorType',              table: 'errortype' },
+    { endpoint: 'PluginDataflowsIndicator',              table: 'indicator' },
+  ];
+  const GDPR_PREFIX = {
+    'Level 1': '🔴 Customer Confidential Data',
+    'Level 2': '🟡 Indirect Customer Identification',
+    'Level 3': '🟢 Nonidentifiable / anonymous data',
+  };
+  let count = 0;
+  for (const { endpoint, table } of LOOKUP_TABLES) {
+    try {
+      const items = await fetchAllPages(baseUrl, `${endpoint}?range=0-999`, sessionToken, appToken);
+      for (const item of items) {
+        const rawMeaning = String(item.name || item.completename || '');
+        const meaning = table === 'holiday_action' ? (GDPR_PREFIX[rawMeaning] || rawMeaning) : rawMeaning;
+        await s.run(
+          `MERGE (l:DataflowLookup { table: $table, glpiId: $id })
+           SET l.name = $name, l.meaning = $meaning, l.updatedAt = $now`,
+          { table, id: String(item.id), name: rawMeaning, meaning, now: new Date().toISOString() }
+        ).catch(() => {});
+        count++;
+      }
+    } catch {}
+  }
+  // Cache in ctx so runDataflows can use it without another Neo4j query
+  ctx.lookupMap = {};
+  const lRes = await s.run(`MATCH (l:DataflowLookup) RETURN l.table AS t, l.glpiId AS id, l.name AS name, l.meaning AS meaning`);
+  for (const rec of lRes.records) {
+    const t = rec.get('t');
+    if (!ctx.lookupMap[t]) ctx.lookupMap[t] = new Map();
+    ctx.lookupMap[t].set(rec.get('id'), { name: rec.get('name'), meaning: rec.get('meaning') });
+  }
+  return { count };
+}
+
+async function runDataflowHistory(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id, coalesce(d.lastLogId, '0') AS lastLogId`);
+  const dataflows = dfRes.records.map(r => ({ id: r.get('id'), lastLogId: parseInt(r.get('lastLogId'), 10) || 0 }));
+  const BATCH = 10;
+  let count = 0;
+  for (let i = 0; i < dataflows.length; i += BATCH) {
+    const batch = dataflows.slice(i, i + BATCH);
+    const fetched = await Promise.all(
+      batch.map(async ({ id, lastLogId }) => {
+        const logs = await fetchDataflowSub(baseUrl, id, 'Log', sessionToken, appToken);
+        return { id, newLogs: logs.filter(l => l.id > lastLogId) };
+      })
+    );
+    for (const { id, newLogs } of fetched) {
+      if (!newLogs.length) continue;
+      for (const log of newLogs) {
+        try {
+          await s.run(
+            `MERGE (l:DataflowLog { glpiId: $logId })
+             SET l.dataflowId = $dfId, l.action = $action, l.user = $user,
+                 l.date = $date, l.fieldOption = $fieldOpt,
+                 l.oldValue = $old, l.newValue = $new, l.updatedAt = $now
+             WITH l MATCH (d:Dataflow { glpiId: $dfId }) MERGE (d)-[:HAS_LOG]->(l)`,
+            {
+              logId: String(log.id), dfId: String(id),
+              action: String(log.itemtype || ''), user: String(log.user_name || ''),
+              date: String(log.date_mod || ''), fieldOpt: String(log.field || ''),
+              old: String(log.old_value || ''), new: String(log.new_value || ''),
+              now: new Date().toISOString(),
+            }
+          );
+          count++;
+        } catch {}
+      }
+      const latest = newLogs.reduce((a, b) => (a.id > b.id ? a : b));
+      try {
+        await s.run(
+          `MATCH (d:Dataflow { glpiId: $dfId })
+           SET d.lastActivity = $date, d.lastEditor = $user, d.lastLogId = $logId`,
+          { dfId: String(id), date: String(latest.date_mod || ''), user: String(latest.user_name || ''), logId: String(latest.id) }
+        );
+      } catch {}
+    }
+  }
+  return { count, dataflowsProcessed: dataflows.length };
+}
+
+// Resolve a lookup value (by numeric ID or label string) from ctx.lookupMap
+const resolveLookup = (table, val, ctx) => {
+  if (!val || val === '0') return '';
+  const v = String(val);
+  const map = ctx.lookupMap ? ctx.lookupMap[table] : null;
+  if (!map) return v;
+  const entry = map.get(v);
+  if (entry) return entry.meaning || entry.name || v;
+  // Fallback: search by name match
+  for (const e of map.values()) {
+    if (e.name === v) return e.meaning || e.name || v;
+  }
+  return v;
+};
+
 async function runDataflows(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
   const INACTIVE = ['removed', 'stopped', 'inactive', 'deleted'];
+
+  // Load lookup map from Neo4j if dataflow_lookups didn't already populate it this run
+  if (!ctx.lookupMap) {
+    ctx.lookupMap = {};
+    try {
+      const lRes = await s.run(`MATCH (l:DataflowLookup) RETURN l.table AS t, l.glpiId AS id, l.name AS name, l.meaning AS meaning`);
+      for (const rec of lRes.records) {
+        const t = rec.get('t');
+        if (!ctx.lookupMap[t]) ctx.lookupMap[t] = new Map();
+        ctx.lookupMap[t].set(rec.get('id'), { name: rec.get('name'), meaning: rec.get('meaning') });
+      }
+    } catch {}
+  }
 
   // Use appIdMap built by runAppStructures if available, else fetch it now
   if (!ctx.appIdMap) {
@@ -879,6 +1005,9 @@ async function runDataflows(ctx) {
       for (const a of apps) { if (a.id && a.name) ctx.appIdMap.set(String(a.id), a.name); }
     } catch {}
   }
+  // Reverse map: name → glpiId (needed for building GLPI links when expand_dropdowns returns labels)
+  const appNameToId = new Map();
+  for (const [id, name] of ctx.appIdMap) appNameToId.set(name, id);
 
   const resolveApp = (val) => {
     if (!val || val === '0') return '';
@@ -926,20 +1055,73 @@ async function runDataflows(ctx) {
       }
     );
 
-    // Knowledge upsert — mirrors sync.js dataflows block exactly
+    // Knowledge upsert — full markdown table format
     try {
-      const dfTopic = `Dataflow #${dfId} — ${dfName}`;
+      const dfTopic   = `Dataflow #${dfId} — ${dfName}`;
+      const dfGdpr    = resolveLookup('holiday_action', item.plugin_dataflows_holidayactions_id, ctx);
+      const dfIndicator = String(item.plugin_dataflows_indicators_id || '');
+      const srcGlpiId = src ? appNameToId.get(src) : null;
+      const dstGlpiId = dst ? appNameToId.get(dst) : null;
+      const srcLink   = src && srcGlpiId
+        ? `[${src}](${baseUrl}/plugins/archisw/front/swcomponent.form.php?id=${srcGlpiId})`
+        : (src || 'unknown');
+      const dstLink   = dst && dstGlpiId
+        ? `[${dst}](${baseUrl}/plugins/archisw/front/swcomponent.form.php?id=${dstGlpiId})`
+        : (dst || 'unknown');
+      const dateMod   = String(item.date_mod || '').substring(0, 10);
+      const row = (k, v) => v ? `| ${k} | ${v} |` : '';
       const dfContent = [
-        dfDesc || dfName, '',
-        'GLPI LIVE DATA (auto-updated by sync):',
-        `GLPI ID: ${dfId}`,
-        `From: ${src || 'unknown'} -> To: ${dst || 'unknown'}`,
-        dfStatusRaw  ? `Status: ${dfStatusRaw}`     : '',
-        dfComplexity ? `Complexity: ${dfComplexity}` : '',
-        dfProtocol   ? `Protocol: ${dfProtocol}`     : '',
-        dfFlowGroup  ? `Flow Group: ${dfFlowGroup}`  : '',
-        `Last synced: ${now.split('T')[0]}`,
-      ].filter(Boolean).join('\n');
+        `## Dataflow #${dfId} — ${dfName}`,
+        '',
+        dfDesc ? `> ${dfDesc}` : '',
+        '',
+        '### General',
+        '| Field | Value |',
+        '|---|---|',
+        row('GLPI ID',        dfId),
+        row('Name',           dfName),
+        row('Status',         dfStatusRaw),
+        row('Flow Group',     dfFlowGroup),
+        row('GDPR Level',     dfGdpr),
+        row('Indicator',      dfIndicator),
+        dateMod ? `| Last Modified | ${dateMod} |` : '',
+        `| Last Synced | ${now.split('T')[0]} |`,
+        '',
+        '### Flow',
+        '| Field | Value |',
+        '|---|---|',
+        `| From | ${srcLink} |`,
+        `| To | ${dstLink} |`,
+        row('From Auth',         String(item.plugin_dataflows_fromauthenticationtypes_id || '')),
+        row('To Auth',           String(item.plugin_dataflows_toauthenticationtypes_id   || '')),
+        row('From External URL', item.fromexternalurl || ''),
+        row('To External URL',   item.toexternalurl   || ''),
+        '',
+        '### Technical',
+        '| Field | Value |',
+        '|---|---|',
+        row('Complexity', dfComplexity),
+        row('Protocol',   dfProtocol),
+        row('Pattern',    String(item.plugin_dataflows_transferpatterns_id || '')),
+        row('Mode',       String(item.plugin_dataflows_transfermodes_id    || '')),
+        row('Trigger',    String(item.plugin_dataflows_triggertypes_id     || '')),
+        row('Frequency',  String(item.plugin_dataflows_transferfreqs_id    || '')),
+        row('Error Handling', String(item.plugin_dataflows_errortypes_id   || '')),
+        row('Source Connector', String(item.plugin_dataflows_connectors_id || '')),
+        '',
+        '### Ownership',
+        '| Field | Value |',
+        '|---|---|',
+        row('Owner',         String(item.users_id  || '')),
+        row('Group',         String(item.groups_id || '')),
+        row('Support Group', String(item.groups_id_tech || '')),
+        '',
+        '### Documentation',
+        '| Field | Value |',
+        '|---|---|',
+        row('Mapping Doc',   item.mappingdocurl  || ''),
+        row('Technical Doc', item.technicaldocurl || ''),
+      ].filter(v => v !== undefined && v !== null).join('\n');
 
       const kRes = await s.run(
         `MATCH (k:Knowledge) WHERE k.category = 'dataflow' AND k.glpiId = $glpiId RETURN k.id AS id`,
@@ -1227,6 +1409,8 @@ const RUNNERS = {
   field_change_history:      runFieldChangeHistory,
   app_structures:            runAppStructures,
   app_structures_history:    runAppStructuresHistory,
+  dataflow_lookups:          runDataflowLookups,
+  dataflow_history:          runDataflowHistory,
   dataflows:                 runDataflows,
   dataflow_tickets:          runDataflowTickets,
   dataflow_changes:          runDataflowChanges,
@@ -1437,6 +1621,75 @@ router.post('/run', async (req, res) => {
   } finally {
     await s.close();
   }
+});
+
+// GET /api/pipeline/dataflow/:id/linked — tickets, changes and associated apps for a dataflow (from Neo4j)
+router.get('/dataflow/:id/linked', async (req, res) => {
+  const s = driver.session();
+  try {
+    const id = String(req.params.id);
+    const [tRes, cRes, aRes] = await Promise.all([
+      s.run(`MATCH (d:Dataflow { glpiId: $id })-[:HAS_TICKET]->(t:Ticket) RETURN t { .* } AS t ORDER BY t.dateMod DESC LIMIT 200`, { id }),
+      s.run(`MATCH (d:Dataflow { glpiId: $id })-[:HAS_CHANGE]->(c:Change)  RETURN c { .* } AS c ORDER BY c.dateMod DESC LIMIT 200`, { id }),
+      s.run(`MATCH (d:Dataflow { glpiId: $id })-[:ASSOCIATED_WITH]->(a:Application) RETURN a { .* } AS a ORDER BY a.name`, { id }),
+    ]);
+    const mapTicket = r => ({ id: r.get('t').glpiId, name: r.get('t').name, status: r.get('t').status, priority: r.get('t').priority, itilcategories_id: r.get('t').category, date_mod: r.get('t').dateMod, date: r.get('t').date });
+    const mapChange = r => ({ id: r.get('c').glpiId, name: r.get('c').name, status: r.get('c').status, priority: r.get('c').priority, itilcategories_id: r.get('c').category, date_mod: r.get('c').dateMod, date: r.get('c').date });
+    const mapApp    = r => ({ id: r.get('a').glpiId, name: r.get('a').name, plugin_archisw_swcomponenttypes_id: r.get('a').type, entities_id: r.get('a').entity, shortdescription: r.get('a').desc });
+    res.json({ tickets: tRes.records.map(mapTicket), changes: cRes.records.map(mapChange), apps: aRes.records.map(mapApp) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { await s.close(); }
+});
+
+// GET /api/pipeline/app/:id/linked — tickets, changes and dataflows for an application
+// Tickets/changes are fetched from GLPI on-demand; dataflows come from Neo4j.
+router.get('/app/:id/linked', async (req, res) => {
+  const s = driver.session();
+  try {
+    const id  = String(req.params.id);
+    const { getConfig } = require('../lib/scheduler');
+    const cfg = await getConfig();
+    if (!cfg || !cfg.glpiUrl) return res.status(503).json({ error: 'No stored pipeline config' });
+
+    const base  = cfg.glpiUrl.replace(/\/$/, '');
+    const agent = base.startsWith('https') ? httpsAgent : undefined;
+
+    // Authenticate with GLPI
+    enforceGetOnly('GET');
+    const sessRes = await fetch(`${base}/apirest.php/initSession`, {
+      method: 'GET',
+      headers: { 'Authorization': `user_token ${cfg.glpiUserToken}`, 'App-Token': cfg.glpiAppToken },
+      agent,
+    });
+    const sessData = await sessRes.json();
+    if (!sessData.session_token) return res.status(401).json({ error: 'GLPI auth failed', detail: sessData });
+    const sessionToken = sessData.session_token;
+
+    // Parallel: GLPI ticket/change fetches + Neo4j dataflow query
+    const [tickets, changes, dfRes] = await Promise.all([
+      fetchAppSub(base, id, 'Ticket', sessionToken, cfg.glpiAppToken)
+        .then(rows => rows.map(t => ({ id: t.id, name: t.name, status: t.status, priority: t.priority, itilcategories_id: t.itilcategories_id, date_mod: t.date_mod, date: t.date, content: t.content }))),
+      fetchAppSub(base, id, 'Change', sessionToken, cfg.glpiAppToken)
+        .then(rows => rows.map(c => ({ id: c.id, name: c.name, status: c.status, priority: c.priority, itilcategories_id: c.itilcategories_id, date_mod: c.date_mod, date: c.date, content: c.content }))),
+      s.run(
+        `MATCH (a:Application { glpiId: $id })-[:FEEDS_INTO|CONNECTS_TO]-(d:Dataflow)
+         WHERE d.glpiId IS NOT NULL AND d.glpiId <> ''
+         RETURN DISTINCT d { .* } AS d ORDER BY d.name`,
+        { id }
+      ),
+    ]);
+
+    // Kill GLPI session (best-effort)
+    fetch(`${base}/apirest.php/killSession`, { method: 'GET', headers: glpiHeaders(sessionToken, cfg.glpiAppToken), agent }).catch(() => {});
+
+    const dataflows = dfRes.records.map(r => {
+      const d = r.get('d');
+      return { id: d.glpiId, name: d.name, desc: d.desc || d.description || '', status: d.status };
+    });
+
+    res.json({ tickets, changes, dataflows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { await s.close(); }
 });
 
 // GET /api/pipeline/config — read scheduler config (creds redacted)
