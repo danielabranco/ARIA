@@ -1696,11 +1696,9 @@ router.get('/dataflow/:id/linked', async (req, res) => {
   const s = driver.session();
   try {
     const id = String(req.params.id);
-    const [tRes, cRes, aRes] = await Promise.all([
-      s.run(`MATCH (d:Dataflow { glpiId: $id })-[:HAS_TICKET]->(t:Ticket) RETURN t { .* } AS t ORDER BY t.dateMod DESC LIMIT 200`, { id }),
-      s.run(`MATCH (d:Dataflow { glpiId: $id })-[:HAS_CHANGE]->(c:Change)  RETURN c { .* } AS c ORDER BY c.dateMod DESC LIMIT 200`, { id }),
-      s.run(`MATCH (d:Dataflow { glpiId: $id })-[:ASSOCIATED_WITH]->(a:Application) RETURN a { .* } AS a ORDER BY a.name`, { id }),
-    ]);
+    const tRes = await s.run(`MATCH (d:Dataflow { glpiId: $id })-[:HAS_TICKET]->(t:Ticket) RETURN t { .* } AS t ORDER BY t.dateMod DESC LIMIT 200`, { id });
+    const cRes = await s.run(`MATCH (d:Dataflow { glpiId: $id })-[:HAS_CHANGE]->(c:Change)  RETURN c { .* } AS c ORDER BY c.dateMod DESC LIMIT 200`, { id });
+    const aRes = await s.run(`MATCH (d:Dataflow { glpiId: $id })-[:ASSOCIATED_WITH]->(a:Application) RETURN a { .* } AS a ORDER BY a.name`, { id });
     const mapTicket = r => ({ id: r.get('t').glpiId, name: r.get('t').name, status: r.get('t').status, priority: r.get('t').priority, itilcategories_id: r.get('t').category, date_mod: r.get('t').dateMod, date: r.get('t').date });
     const mapChange = r => ({ id: r.get('c').glpiId, name: r.get('c').name, status: r.get('c').status, priority: r.get('c').priority, itilcategories_id: r.get('c').category, date_mod: r.get('c').dateMod, date: r.get('c').date });
     const mapApp    = r => ({ id: r.get('a').glpiId, name: r.get('a').name, plugin_archisw_swcomponenttypes_id: r.get('a').type, entities_id: r.get('a').entity, shortdescription: r.get('a').desc });
