@@ -2248,15 +2248,15 @@ const GLPISync = ({ api }) => {
   const [activeRun, setActiveRun] = useState(null);
   const [force, setForce]       = useState(false);
   const [runError, setRunError] = useState(null);
+  const [schedule, setSchedule] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("aria_pipeline_schedule") || "{}"); } catch { return {}; }
+  });
 
   const cfg          = api.cfg();
   const isConfigured = !!(cfg.glpiUrl && cfg.glpiUserToken && cfg.glpiAppToken);
 
   const loadStatus = async () => {
-    try {
-      const d = await api.get("/api/pipeline/status");
-      setStatus(d);
-    } catch {}
+    try { setStatus(await api.get("/api/pipeline/status")); } catch {}
   };
 
   useEffect(() => { loadStatus(); }, []);
@@ -2277,39 +2277,53 @@ const GLPISync = ({ api }) => {
       if (stageOverride) body.stages = stageOverride;
       else body.tier = tier;
       await api.post("/api/pipeline/run", body);
-    } catch (e) {
-      setRunError(e.message);
-    }
+    } catch (e) { setRunError(e.message); }
     await loadStatus();
     setRunning(false);
     setActiveRun(null);
   };
 
-  const TIER_COLORS  = { live: T.success, hourly: T.warning, nightly: T.purple };
-  const STATUS_DOT   = { never_run: T.textDim, ok: T.success, error: T.danger, running: T.warning };
-  const STATUS_LABEL = { never_run: "Never run", ok: "Done", error: "Failed", running: "Running…" };
-
-  const TIERS = [
-    { id: "live",    label: "Run Live",    color: T.success, desc: "Session auth · incremental tickets · followups · tasks · rescore" },
-    { id: "hourly",  label: "Run Hourly",  color: T.warning, desc: "Live + change records" },
-    { id: "nightly", label: "Run Nightly", color: T.purple,  desc: "Hourly + groups/categories · full reconcile · users · reopens · escalations" },
-  ];
-
-  const STORE = [
-    { k: "tickets",   label: "Tickets",   color: T.success },
-    { k: "changes",   label: "Changes",   color: T.warning },
-    { k: "followups", label: "Followups", color: T.accent  },
-    { k: "tasks",     label: "Tasks",     color: T.pink    },
-    { k: "users",     label: "Users",     color: T.teal    },
-    { k: "groups",    label: "Groups",    color: T.purple  },
-  ];
+  const saveSchedule = () => localStorage.setItem("aria_pipeline_schedule", JSON.stringify(schedule));
 
   const stages = status?.stages || [];
   const store  = status?.store  || {};
 
+  const TIER_COLOR = { live: T.success, hourly: T.warning, nightly: T.purple, weekly: T.accent };
+
+  const STATUS_BADGE = {
+    success:   { label: "DONE",    color: T.success },
+    error:     { label: "ERROR",   color: T.danger  },
+    running:   { label: "RUNNING", color: T.warning },
+    never_run: { label: "IDLE",    color: T.textDim },
+  };
+
+  const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : null;
+
+  // Summary bar calculations
+  const lastRunForTier = (tier) => {
+    const s = stages.filter(s => s.tier === tier && s.lastRun).sort((a, b) => (b.lastRun || "").localeCompare(a.lastRun || ""));
+    return s[0]?.lastRun ? new Date(s[0].lastRun).toLocaleTimeString() : "—";
+  };
+  const doneCount    = stages.filter(s => s.status === "success").length;
+  const errorCount   = stages.filter(s => s.status === "error").length;
+  const runningCount = stages.filter(s => s.status === "running").length;
+  const overallStatus = runningCount > 0 ? "RUNNING" : errorCount > 0 ? "ERROR" : doneCount > 0 ? "SYNCED" : "IDLE";
+  const overallColor  = { RUNNING: T.warning, ERROR: T.danger, SYNCED: T.success, IDLE: T.textDim }[overallStatus];
+
+  const STORE_ITEMS = [
+    { k: "tickets",    label: "TICKETS",    color: T.success },
+    { k: "followups",  label: "FOLLOWUPS",  color: T.accent  },
+    { k: "reopens",    label: "REOPENS",    color: T.warning },
+    { k: "history",    label: "HISTORY",    color: T.textMuted },
+    { k: "tasks",      label: "TASKS",      color: T.pink    },
+    { k: "users",      label: "USERS",      color: T.teal    },
+    { k: "groups",     label: "GROUPS",     color: T.purple  },
+    { k: "categories", label: "CATEGORIES", color: T.accent  },
+  ];
+
   return (
     <div>
-      <SectionHeader title="GLPI Sync" subtitle="Pull data from GLPI into ARIA's knowledge graph."
+      <SectionHeader title="GLPI Sync Pipeline" subtitle="Pull GLPI data into ARIA's knowledge graph."
         actions={
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: T.textMuted, cursor: "pointer", userSelect: "none" }}>
@@ -2323,118 +2337,218 @@ const GLPISync = ({ api }) => {
 
       {/* Connection banner */}
       {!isConfigured ? (
-        <div style={{ marginBottom: 20, padding: "13px 18px", borderRadius: T.radius, background: T.dangerGlow, border: `1px solid ${T.danger}30`, display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
-          <Icon name="warning" size={15} color={T.danger} />
+        <div style={{ marginBottom: 14, padding: "10px 16px", borderRadius: T.radius, background: T.dangerGlow, border: `1px solid ${T.danger}30`, display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
+          <Icon name="warning" size={14} color={T.danger} />
           <span style={{ color: T.danger }}>GLPI not configured — go to <strong>Settings</strong> and add your GLPI credentials first.</span>
         </div>
       ) : (
-        <div style={{ marginBottom: 20, padding: "13px 18px", borderRadius: T.radius, background: T.successGlow, border: `1px solid ${T.success}30`, display: "flex", alignItems: "center", gap: 12 }}>
-          <Icon name="check" size={15} color={T.success} />
+        <div style={{ marginBottom: 14, padding: "10px 16px", borderRadius: T.radius, background: T.successGlow, border: `1px solid ${T.success}30`, display: "flex", alignItems: "center", gap: 12 }}>
+          <Icon name="check" size={14} color={T.success} />
           <span style={{ fontSize: 13, fontWeight: 600, color: T.success }}>GLPI Connected</span>
           <span style={{ fontSize: 12, color: T.textMuted }}>{cfg.glpiUrl}</span>
         </div>
       )}
 
       {runError && (
-        <div style={{ marginBottom: 16, padding: "10px 16px", borderRadius: T.radius, background: T.dangerGlow, border: `1px solid ${T.danger}30`, fontSize: 13, color: T.danger }}>
+        <div style={{ marginBottom: 12, padding: "10px 16px", borderRadius: T.radius, background: T.dangerGlow, border: `1px solid ${T.danger}30`, fontSize: 13, color: T.danger }}>
           {runError}
         </div>
       )}
 
-      {/* Tier run buttons */}
-      <Card style={{ marginBottom: 16, padding: "14px 18px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: T.textMuted }}>Pipeline tier:</span>
-        {TIERS.map(t => (
-          <Btn key={t.id} size="sm" color={t.color} onClick={() => runPipeline(t.id)} disabled={running || !isConfigured} title={t.desc}>
-            {running && activeRun === t.id ? "Running…" : t.label}
-          </Btn>
-        ))}
-        <span style={{ fontSize: 11, color: T.textDim, marginLeft: "auto" }}>Nightly ⊃ Hourly ⊃ Live</span>
+      {/* ── Summary bar ── */}
+      <Card style={{ marginBottom: 12, padding: "12px 18px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <div style={{ width: 9, height: 9, borderRadius: "50%", background: overallColor, boxShadow: overallStatus === "SYNCED" ? `0 0 7px ${T.success}80` : "none" }} />
+            <span style={{ fontSize: 12, fontWeight: 800, color: overallColor, letterSpacing: "0.07em" }}>{overallStatus}</span>
+          </div>
+          <div style={{ width: 1, height: 18, background: T.border }} />
+          {["live", "hourly", "nightly", "weekly"].map(tier => (
+            <div key={tier} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: TIER_COLOR[tier] || T.textDim, textTransform: "uppercase", letterSpacing: "0.08em" }}>{tier}</span>
+              <span style={{ fontSize: 10, color: T.textMuted }}>{lastRunForTier(tier)}</span>
+            </div>
+          ))}
+          <div style={{ width: 1, height: 18, background: T.border }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ fontSize: 11, color: T.textMuted }}>Stages</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{doneCount}/{stages.length || 24}</span>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            {[["live", T.success], ["hourly", T.warning], ["nightly", T.purple]].map(([tier, col]) => (
+              <Btn key={tier} size="sm" color={col} onClick={() => runPipeline(tier)} disabled={running || !isConfigured}>
+                {running && activeRun === tier ? "Running…" : `Run ${tier.charAt(0).toUpperCase() + tier.slice(1)}`}
+              </Btn>
+            ))}
+          </div>
+        </div>
       </Card>
 
-      {/* Store counts */}
-      {status && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 20 }}>
-          {STORE.map(c => (
-            <Card key={c.k} style={{ padding: "14px 16px", textAlign: "center" }}>
-              <div style={{ fontSize: 22, fontWeight: 800, color: c.color, letterSpacing: "-0.03em" }}>
-                {(store[c.k] || 0).toLocaleString()}
-              </div>
-              <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4 }}>{c.label}</div>
-            </Card>
-          ))}
-        </div>
-      )}
+      {/* ── Store counts ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 8, marginBottom: 14 }}>
+        {STORE_ITEMS.map(c => (
+          <Card key={c.k} style={{ padding: "10px 8px", textAlign: "center" }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: c.color, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+              {(store[c.k] || 0).toLocaleString()}
+            </div>
+            <div style={{ fontSize: 9, fontWeight: 700, color: T.textDim, marginTop: 3, letterSpacing: "0.05em" }}>{c.label}</div>
+          </Card>
+        ))}
+      </div>
 
-      {/* Stage cards */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {stages.length === 0 ? (
-          <Card><EmptyState icon="sync" title="Loading pipeline…" description="Fetching stage metadata from Neo4j." /></Card>
-        ) : stages.map(stage => {
-          const tierColor    = TIER_COLORS[stage.tier] || T.textDim;
-          const dotColor     = STATUS_DOT[stage.status] || T.textDim;
-          const stageRunning = running && activeRun !== null;
-          const lastRun      = stage.lastRun ? new Date(stage.lastRun).toLocaleString() : null;
+      {/* ── Pipeline table ── */}
+      <Card style={{ padding: 0, overflow: "hidden", marginBottom: 14 }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: `${T.border}30`, borderBottom: `1px solid ${T.border}` }}>
+                {["", "STAGE", "TIER", "GLPI ENDPOINT", "RECORDS", "DURATION", "STATUS", ""].map((h, i) => (
+                  <th key={i} style={{
+                    padding: "7px 12px", textAlign: i === 0 ? "center" : "left",
+                    fontSize: 9, fontWeight: 700, color: T.textDim, letterSpacing: "0.1em",
+                    whiteSpace: "nowrap", borderRight: i < 7 ? `1px solid ${T.border}20` : "none",
+                  }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {stages.length === 0 ? (
+                <tr><td colSpan={8} style={{ padding: 32, textAlign: "center", color: T.textDim, fontSize: 13 }}>Loading pipeline…</td></tr>
+              ) : stages.map((stage, idx) => {
+                const badge     = STATUS_BADGE[stage.status] || STATUS_BADGE.never_run;
+                const tColor    = TIER_COLOR[stage.tier] || T.textDim;
+                const isRunning = (running && activeRun === stage.id) || stage.status === "running";
+                const startTime = fmtTime(stage.lastRun);
+                const endTime   = fmtTime(stage.lastRunEnd);
+                const dur       = stage.duration ? `${stage.duration}s` : null;
 
-          return (
-            <Card key={stage.id} style={{
-              padding: 0,
-              border: `1.5px solid ${stage.status === "error" ? T.danger + "40" : stage.status === "ok" ? T.success + "20" : T.border}`,
-            }}>
-              <div style={{ display: "flex", alignItems: "center", padding: "12px 18px", gap: 14 }}>
-                {/* Status dot */}
-                <div style={{
-                  width: 9, height: 9, borderRadius: "50%", flexShrink: 0,
-                  background: stageRunning ? T.warning : dotColor,
-                  boxShadow: (stage.status === "ok" && !stageRunning) ? `0 0 7px ${T.success}70` : "none",
-                }} />
-
-                {/* Label + desc */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{stage.label}</span>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 8px", borderRadius: 20, background: `${tierColor}15`, color: tierColor, border: `1px solid ${tierColor}28` }}>{stage.tier}</span>
-                    {stage.count > 0 && (
-                      <span style={{ fontSize: 11, fontWeight: 600, padding: "1px 9px", borderRadius: 20, background: T.accentGlow, color: T.accent, border: `1px solid ${T.accent}28` }}>
-                        {stage.count.toLocaleString()}
+                return (
+                  <tr key={stage.id} style={{
+                    borderBottom: `1px solid ${T.border}18`,
+                    background: idx % 2 === 1 ? `${T.border}08` : "transparent",
+                  }}>
+                    {/* Status dot */}
+                    <td style={{ padding: "9px 12px", width: 32, textAlign: "center" }}>
+                      <div style={{
+                        width: 7, height: 7, borderRadius: "50%", margin: "0 auto",
+                        background: isRunning ? T.warning : badge.color,
+                        boxShadow: stage.status === "success" && !isRunning ? `0 0 5px ${T.success}70` : "none",
+                      }} />
+                    </td>
+                    {/* Stage name + description */}
+                    <td style={{ padding: "7px 12px", minWidth: 190, borderRight: `1px solid ${T.border}20` }}>
+                      <div style={{ fontWeight: 600, color: T.text, fontSize: 12, marginBottom: 2 }}>{stage.label}</div>
+                      <div style={{ fontSize: 10, color: T.textDim, lineHeight: 1.4 }}>{stage.desc}</div>
+                    </td>
+                    {/* Tier badge */}
+                    <td style={{ padding: "7px 12px", width: 76, borderRight: `1px solid ${T.border}20` }}>
+                      <span style={{
+                        fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 10,
+                        background: `${tColor}18`, color: tColor, border: `1px solid ${tColor}28`,
+                        whiteSpace: "nowrap", letterSpacing: "0.06em",
+                      }}>
+                        {stage.tier.toUpperCase()}
                       </span>
-                    )}
-                    {stage.status === "error" && stage.errorMessage && (
-                      <span style={{ fontSize: 11, color: T.danger }}>— {stage.errorMessage}</span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.5 }}>{stage.desc}</div>
-                  {lastRun && <div style={{ fontSize: 10, color: T.textDim, marginTop: 3 }}>Last: {lastRun}</div>}
-                </div>
-
-                {/* Status label + run button */}
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: stageRunning ? T.warning : dotColor, minWidth: 60, textAlign: "right" }}>
-                    {stageRunning ? "Running…" : (STATUS_LABEL[stage.status] || stage.status)}
-                  </span>
-                  <Btn size="sm" variant="secondary"
-                    onClick={() => runPipeline("live", [stage.id])}
-                    disabled={running || !isConfigured || stage.id === "session_auth"}>
-                    Run
-                  </Btn>
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-
-      {/* Info box */}
-      <div style={{ marginTop: 18, padding: "14px 18px", borderRadius: T.radius, background: T.accentGlow, border: `1px solid ${T.accent}28`, fontSize: 12, color: T.textMuted, lineHeight: 1.75 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
-          <Icon name="info" size={14} color={T.accent} />
-          <span style={{ fontWeight: 600, color: T.accent }}>How it works</span>
+                    </td>
+                    {/* Endpoint */}
+                    <td style={{ padding: "7px 12px", minWidth: 230, borderRight: `1px solid ${T.border}20` }}>
+                      <span style={{ fontSize: 10, color: T.textMuted, fontFamily: "monospace" }}>{stage.endpoint}</span>
+                    </td>
+                    {/* Records */}
+                    <td style={{ padding: "7px 12px", width: 120, borderRight: `1px solid ${T.border}20` }}>
+                      <div style={{ fontSize: 10, color: T.textDim, lineHeight: 1.8 }}>
+                        {startTime && <div><span style={{ color: T.success }}>▷</span> {startTime}</div>}
+                        {endTime   && <div><span style={{ color: T.textDim }}>▪</span> {endTime}</div>}
+                        {stage.count > 0 && (
+                          <div style={{ fontWeight: 700, color: T.accent, fontSize: 11 }}>{stage.count.toLocaleString()}</div>
+                        )}
+                      </div>
+                    </td>
+                    {/* Duration */}
+                    <td style={{ padding: "7px 12px", width: 72, borderRight: `1px solid ${T.border}20` }}>
+                      <span style={{ fontSize: 11, color: T.textMuted }}>{dur || "—"}</span>
+                    </td>
+                    {/* Status badge */}
+                    <td style={{ padding: "7px 12px", width: 90, borderRight: `1px solid ${T.border}20` }}>
+                      <span style={{
+                        fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+                        background: `${isRunning ? T.warning : badge.color}18`,
+                        color: isRunning ? T.warning : badge.color,
+                        border: `1px solid ${isRunning ? T.warning : badge.color}28`,
+                        letterSpacing: "0.07em",
+                      }}>
+                        {isRunning ? "RUNNING" : badge.label}
+                      </span>
+                      {stage.status === "error" && stage.errorMessage && (
+                        <div style={{ fontSize: 9, color: T.danger, marginTop: 3, maxWidth: 110, wordBreak: "break-all" }}>
+                          {stage.errorMessage.substring(0, 70)}
+                        </div>
+                      )}
+                    </td>
+                    {/* Run button */}
+                    <td style={{ padding: "7px 12px", width: 56 }}>
+                      <Btn size="sm" variant="secondary"
+                        onClick={() => runPipeline("live", [stage.id])}
+                        disabled={running || !isConfigured || stage.id === "session_auth"}>
+                        ▷
+                      </Btn>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        <strong style={{ color: T.text }}>Live</strong> stages run every execution (auth, incremental tickets, followups, tasks, rescore).
-        <strong style={{ color: T.text }}> Hourly</strong> adds change records.
-        <strong style={{ color: T.text }}> Nightly</strong> adds full reconciliation, user directory, reopens, and escalation history.
-        Use <strong style={{ color: T.text }}>Force full re-sync</strong> to bypass incremental filters on the next run.
+      </Card>
+
+      {/* ── Legend ── */}
+      <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", fontSize: 11, color: T.textMuted, alignItems: "center" }}>
+        {[["LIVE", T.success], ["HOURLY", T.warning], ["NIGHTLY", T.purple], ["WEEKLY", T.accent]].map(([label, color]) => (
+          <span key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, display: "inline-block" }} />
+            {label}
+          </span>
+        ))}
+        <span style={{ color: T.textDim, marginLeft: 4 }}>Nightly ⊃ Hourly ⊃ Live</span>
       </div>
+
+      {/* ── Refresh Schedule ── */}
+      <Card style={{ padding: "16px 20px" }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 14 }}>Refresh Schedule</div>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div>
+            <FieldLabel>Live interval (min)</FieldLabel>
+            <DarkInput type="number" value={schedule.liveInterval || ""} min={1} max={60}
+              onChange={e => setSchedule(s => ({ ...s, liveInterval: e.target.value }))}
+              style={{ width: 90 }} />
+          </div>
+          <div>
+            <FieldLabel>Nightly time</FieldLabel>
+            <DarkInput type="time" value={schedule.nightlyTime || ""}
+              onChange={e => setSchedule(s => ({ ...s, nightlyTime: e.target.value }))}
+              style={{ width: 120 }} />
+          </div>
+          <div>
+            <FieldLabel>Weekly day</FieldLabel>
+            <select value={schedule.weeklyDay ?? ""} onChange={e => setSchedule(s => ({ ...s, weeklyDay: e.target.value }))}
+              style={{ background: T.sidebar, color: T.text, border: `1px solid ${T.border}`, borderRadius: T.radiusSm, padding: "6px 10px", fontSize: 13, fontFamily: "inherit" }}>
+              <option value="">—</option>
+              {["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].map((d, i) => (
+                <option key={i} value={i}>{d}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <FieldLabel>Weekly time</FieldLabel>
+            <DarkInput type="time" value={schedule.weeklyTime || ""}
+              onChange={e => setSchedule(s => ({ ...s, weeklyTime: e.target.value }))}
+              style={{ width: 120 }} />
+          </div>
+          <Btn onClick={saveSchedule}>Save</Btn>
+        </div>
+      </Card>
     </div>
   );
 };
