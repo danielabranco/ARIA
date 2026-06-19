@@ -647,7 +647,7 @@ async function runFieldChangeHistory(ctx) {
 async function runAppStructures(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
   const INACTIVE = ['removed', 'deleted', 'inactive'];
-  const items = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent?expand_dropdowns=true&is_deleted=0', sessionToken, appToken);
+  const items = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent?expand_dropdowns=true', sessionToken, appToken);
 
   ctx.appIdMap = new Map();
   let count = 0;
@@ -769,7 +769,7 @@ async function runDataflows(ctx) {
   if (!ctx.appIdMap) {
     ctx.appIdMap = new Map();
     try {
-      const apps = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent?expand_dropdowns=true&is_deleted=0', sessionToken, appToken);
+      const apps = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent?expand_dropdowns=true', sessionToken, appToken);
       for (const a of apps) { if (a.id && a.name) ctx.appIdMap.set(String(a.id), a.name); }
     } catch {}
   }
@@ -780,7 +780,7 @@ async function runDataflows(ctx) {
     return /^\d+$/.test(v) ? (ctx.appIdMap.get(v) || v) : v;
   };
 
-  const items = await fetchAllPages(baseUrl, 'PluginDataflowsDataflow?expand_dropdowns=true&is_deleted=0', sessionToken, appToken);
+  const items = await fetchAllPages(baseUrl, 'PluginDataflowsDataflow?expand_dropdowns=true', sessionToken, appToken);
   let count = 0;
 
   for (const item of items) {
