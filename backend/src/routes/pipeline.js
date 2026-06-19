@@ -873,29 +873,18 @@ router.get('/status', async (req, res) => {
       stagesMeta[m.stage] = m;
     }
 
-    // Store counts
-    const [tickets, followups, solutions, logs, tasks, users, groups, cats, changes] = await Promise.all([
-      s.run('MATCH (t:Ticket) RETURN count(t) AS c'),
-      s.run('MATCH (f:Followup) RETURN count(f) AS c'),
-      s.run('MATCH (s:TicketSolution) RETURN count(s) AS c'),
-      s.run('MATCH (l:TicketLog) RETURN count(l) AS c'),
-      s.run('MATCH (t:TicketTask) RETURN count(t) AS c'),
-      s.run('MATCH (u:User) RETURN count(u) AS c'),
-      s.run('MATCH (g:Group) RETURN count(g) AS c'),
-      s.run('MATCH (c:ITILCategory) RETURN count(c) AS c'),
-      s.run('MATCH (c:Change) RETURN count(c) AS c'),
-    ]);
-
+    // Store counts — run sequentially (Neo4j sessions do not support concurrent queries)
+    const countOf = async (q) => { const r = await s.run(q); return r.records[0]?.get('c').toNumber() || 0; };
     const store = {
-      tickets:    tickets.records[0]?.get('c').toNumber()   || 0,
-      followups:  followups.records[0]?.get('c').toNumber() || 0,
-      reopens:    solutions.records[0]?.get('c').toNumber() || 0,
-      history:    logs.records[0]?.get('c').toNumber()      || 0,
-      tasks:      tasks.records[0]?.get('c').toNumber()     || 0,
-      users:      users.records[0]?.get('c').toNumber()     || 0,
-      groups:     groups.records[0]?.get('c').toNumber()    || 0,
-      categories: cats.records[0]?.get('c').toNumber()      || 0,
-      changes:    changes.records[0]?.get('c').toNumber()   || 0,
+      tickets:    await countOf('MATCH (t:Ticket) RETURN count(t) AS c'),
+      followups:  await countOf('MATCH (f:Followup) RETURN count(f) AS c'),
+      reopens:    await countOf('MATCH (s:TicketSolution) RETURN count(s) AS c'),
+      history:    await countOf('MATCH (l:TicketLog) RETURN count(l) AS c'),
+      tasks:      await countOf('MATCH (t:TicketTask) RETURN count(t) AS c'),
+      users:      await countOf('MATCH (u:User) RETURN count(u) AS c'),
+      groups:     await countOf('MATCH (g:Group) RETURN count(g) AS c'),
+      categories: await countOf('MATCH (c:ITILCategory) RETURN count(c) AS c'),
+      changes:    await countOf('MATCH (c:Change) RETURN count(c) AS c'),
     };
 
     // Merge stage defs with metadata
@@ -922,27 +911,17 @@ router.get('/status', async (req, res) => {
 router.get('/stats', async (req, res) => {
   const s = driver.session();
   try {
-    const [tickets, followups, solutions, logs, tasks, users, groups, cats, changes] = await Promise.all([
-      s.run('MATCH (t:Ticket) RETURN count(t) AS c'),
-      s.run('MATCH (f:Followup) RETURN count(f) AS c'),
-      s.run('MATCH (s:TicketSolution) RETURN count(s) AS c'),
-      s.run('MATCH (l:TicketLog) RETURN count(l) AS c'),
-      s.run('MATCH (t:TicketTask) RETURN count(t) AS c'),
-      s.run('MATCH (u:User) RETURN count(u) AS c'),
-      s.run('MATCH (g:Group) RETURN count(g) AS c'),
-      s.run('MATCH (c:ITILCategory) RETURN count(c) AS c'),
-      s.run('MATCH (c:Change) RETURN count(c) AS c'),
-    ]);
+    const countOf = async (q) => { const r = await s.run(q); return r.records[0]?.get('c').toNumber() || 0; };
     res.json({
-      tickets:    tickets.records[0]?.get('c').toNumber()   || 0,
-      followups:  followups.records[0]?.get('c').toNumber() || 0,
-      reopens:    solutions.records[0]?.get('c').toNumber() || 0,
-      history:    logs.records[0]?.get('c').toNumber()      || 0,
-      tasks:      tasks.records[0]?.get('c').toNumber()     || 0,
-      users:      users.records[0]?.get('c').toNumber()     || 0,
-      groups:     groups.records[0]?.get('c').toNumber()    || 0,
-      categories: cats.records[0]?.get('c').toNumber()      || 0,
-      changes:    changes.records[0]?.get('c').toNumber()   || 0,
+      tickets:    await countOf('MATCH (t:Ticket) RETURN count(t) AS c'),
+      followups:  await countOf('MATCH (f:Followup) RETURN count(f) AS c'),
+      reopens:    await countOf('MATCH (s:TicketSolution) RETURN count(s) AS c'),
+      history:    await countOf('MATCH (l:TicketLog) RETURN count(l) AS c'),
+      tasks:      await countOf('MATCH (t:TicketTask) RETURN count(t) AS c'),
+      users:      await countOf('MATCH (u:User) RETURN count(u) AS c'),
+      groups:     await countOf('MATCH (g:Group) RETURN count(g) AS c'),
+      categories: await countOf('MATCH (c:ITILCategory) RETURN count(c) AS c'),
+      changes:    await countOf('MATCH (c:Change) RETURN count(c) AS c'),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
