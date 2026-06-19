@@ -35,9 +35,8 @@ const STAGES = [
   { id: 'dataflow_lookups',          label: 'Dataflow Lookups',             tier: 'weekly',  desc: 'Fetch GLPI dataflow dropdown tables (GDPR/holiday actions, states, types, protocols, etc.) — upserts DataflowLookup nodes used by the dataflows stage for meaning resolution', endpoint: 'GET /PluginDataflowsHolidayAction + States + Types + Protocols (10 tables)' },
   { id: 'dataflow_history',          label: 'Dataflow History',             tier: 'nightly', desc: 'Fetch field-change logs for all dataflows — stores DataflowLog nodes with HAS_LOG rels, updates lastActivity/lastEditor/lastLogId on each Dataflow node (incremental by log ID)', endpoint: 'GET /PluginDataflowsDataflow/{id}/Log {all dataflows, incremental}' },
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
-  { id: 'dataflow_tickets',         label: 'Dataflow Tickets',             tier: 'hourly',  desc: 'Fetch all tickets linked to each dataflow — upserts Ticket nodes and creates HAS_TICKET relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Ticket {all dataflows}' },
-  { id: 'dataflow_changes',         label: 'Dataflow Changes',             tier: 'hourly',  desc: 'Fetch all changes linked to each dataflow — upserts Change nodes and creates HAS_CHANGE relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Change {all dataflows}' },
-  { id: 'dataflow_associated_apps', label: 'Dataflow Associated Apps',     tier: 'nightly', desc: 'Fetch software components associated with each dataflow — creates ASSOCIATED_WITH relationships',                                                             endpoint: 'GET /PluginDataflowsDataflow/{id}/PluginArchiswSwcomponent {all dataflows}' },
+  { id: 'dataflow_itsm_links',       label: 'Dataflow ITSM Links',          tier: 'hourly',  desc: 'Fetch all tickets, changes, problems and projects linked to dataflows via GLPI junction tables — creates HAS_TICKET, HAS_CHANGE, HAS_PROBLEM, HAS_PROJECT relationships',  endpoint: 'GET /Item_Ticket + Change_Item + Item_Problem + Item_Project {searchText[itemtype]=PluginDataflowsDataflow, all at once}' },
+  { id: 'dataflow_associated_items', label: 'Dataflow Associated Items',   tier: 'nightly', desc: 'Fetch items associated with each dataflow from PluginDataflowsDataflow_Item (apps, etc.) — groups client-side, creates ASSOCIATED_WITH relationships',         endpoint: 'GET /PluginDataflowsDataflow_Item {all at once, grouped client-side}' },
 ];
 
 const TIER_ORDER = { live: 0, hourly: 1, nightly: 2, weekly: 3 };
@@ -1266,143 +1265,107 @@ const fetchDataflowSub = async (baseUrl, dfId, subType, sessionToken, appToken) 
   }
 };
 
-async function runDataflowTickets(ctx) {
+async function runDataflowITSMLinks(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
-  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
-  const dataflowIds = dfRes.records.map(r => r.get('id'));
-  const BATCH = 10;
+
+  // ① Fetch all 4 junction tables in parallel — one request each, all dataflows covered
+  const [itemTickets, changeItems, itemProblems, itemProjects] = await Promise.all([
+    fetchAllPages(baseUrl, 'Item_Ticket?searchText[itemtype]=PluginDataflowsDataflow', sessionToken, appToken),
+    fetchAllPages(baseUrl, 'Change_Item?searchText[itemtype]=PluginDataflowsDataflow', sessionToken, appToken),
+    fetchAllPages(baseUrl, 'Item_Problem?searchText[itemtype]=PluginDataflowsDataflow', sessionToken, appToken),
+    fetchAllPages(baseUrl, 'Item_Project?searchText[itemtype]=PluginDataflowsDataflow', sessionToken, appToken),
+  ]);
+
+  // ② Group by dataflow ID client-side
+  const byDf = {};
+  const ensure = id => { if (!byDf[id]) byDf[id] = { tickets: [], changes: [], problems: [], projects: [] }; };
+  for (const row of itemTickets)  { const id = String(row.items_id);     ensure(id); byDf[id].tickets.push(String(row.tickets_id)); }
+  for (const row of changeItems)  { const id = String(row.items_id);     ensure(id); byDf[id].changes.push(String(row.changes_id)); }
+  for (const row of itemProblems) { const id = String(row.items_id);     ensure(id); byDf[id].problems.push(String(row.problems_id)); }
+  for (const row of itemProjects) { const id = String(row.items_id);     ensure(id); byDf[id].projects.push(String(row.projects_id)); }
+
+  // ③ Write to Neo4j sequentially — one rel per row, MERGE is idempotent
   let count = 0;
-
-  for (let i = 0; i < dataflowIds.length; i += BATCH) {
-    const batch = dataflowIds.slice(i, i + BATCH);
-
-    // ① Fetch from GLPI in parallel (each with its own 20 s timeout)
-    const fetched = await Promise.all(
-      batch.map(async dfId => ({
-        dfId,
-        tickets: await fetchDataflowSub(baseUrl, dfId, 'Ticket', sessionToken, appToken),
-      }))
-    );
-
-    // ② Write to Neo4j sequentially — shared session cannot run concurrent queries
-    for (const { dfId, tickets } of fetched) {
-      for (const t of tickets) {
-        try {
-          await s.run(
-            `MERGE (tk:Ticket { glpiId: $id })
-             SET tk.name = $name, tk.status = $status, tk.statusLabel = $statusLabel,
-                 tk.date = $date, tk.dateMod = $dateMod, tk.dateSolved = $dateSolved,
-                 tk.priority = $priority, tk.priorityLabel = $priorityLabel,
-                 tk.urgency = $urgency, tk.impact = $impact,
-                 tk.category = $category, tk.entity = $entity,
-                 tk.updatedAt = $now
-             WITH tk
-             MATCH (d:Dataflow { glpiId: $dfId })
-             MERGE (d)-[:HAS_TICKET]->(tk)`,
-            {
-              id: String(t.id), name: t.name || '',
-              status: String(t.status || ''), statusLabel: TICKET_STATUS[t.status] || '',
-              date: t.date || '', dateMod: t.date_mod || '', dateSolved: t.solvedate || '',
-              priority: String(t.priority || ''), priorityLabel: TICKET_PRIORITY[t.priority] || '',
-              urgency: String(t.urgency || ''), impact: String(t.impact || ''),
-              category: String(t.itilcategories_id || ''), entity: String(t.entities_id || ''),
-              now: new Date().toISOString(), dfId: String(dfId),
-            }
-          );
-          count++;
-        } catch {}
-      }
+  for (const [dfId, links] of Object.entries(byDf)) {
+    for (const ticketId of links.tickets) {
+      try {
+        await s.run(
+          `MERGE (t:Ticket { glpiId: $id }) WITH t MATCH (d:Dataflow { glpiId: $dfId }) MERGE (d)-[:HAS_TICKET]->(t)`,
+          { id: ticketId, dfId }
+        );
+        count++;
+      } catch {}
+    }
+    for (const changeId of links.changes) {
+      try {
+        await s.run(
+          `MERGE (c:Change { glpiId: $id }) WITH c MATCH (d:Dataflow { glpiId: $dfId }) MERGE (d)-[:HAS_CHANGE]->(c)`,
+          { id: changeId, dfId }
+        );
+        count++;
+      } catch {}
+    }
+    for (const problemId of links.problems) {
+      try {
+        await s.run(
+          `MERGE (p:Problem { glpiId: $id }) WITH p MATCH (d:Dataflow { glpiId: $dfId }) MERGE (d)-[:HAS_PROBLEM]->(p)`,
+          { id: problemId, dfId }
+        );
+        count++;
+      } catch {}
+    }
+    for (const projectId of links.projects) {
+      try {
+        await s.run(
+          `MERGE (p:Project { glpiId: $id }) WITH p MATCH (d:Dataflow { glpiId: $dfId }) MERGE (d)-[:HAS_PROJECT]->(p)`,
+          { id: projectId, dfId }
+        );
+        count++;
+      } catch {}
     }
   }
-  return { count, dataflowsProcessed: dataflowIds.length };
+
+  return {
+    count,
+    tickets: itemTickets.length,
+    changes: changeItems.length,
+    problems: itemProblems.length,
+    projects: itemProjects.length,
+  };
 }
 
-async function runDataflowChanges(ctx) {
+async function runDataflowAssociatedItems(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
-  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
-  const dataflowIds = dfRes.records.map(r => r.get('id'));
-  const BATCH = 10;
+
+  // ① Fetch all PluginDataflowsDataflow_Item rows at once — avoids LIKE-match issue with per-id searchText
+  const items = await fetchAllPages(baseUrl, 'PluginDataflowsDataflow_Item', sessionToken, appToken);
+
+  // ② Group by dataflow ID client-side (field is numeric, no expand_dropdowns needed)
+  const byDf = {};
+  for (const row of items) {
+    const dfId = String(row.plugin_dataflows_dataflows_id);
+    (byDf[dfId] ??= []).push(row);
+  }
+
+  // ③ Write ASSOCIATED_WITH rels to Neo4j sequentially
   let count = 0;
-
-  for (let i = 0; i < dataflowIds.length; i += BATCH) {
-    const batch = dataflowIds.slice(i, i + BATCH);
-
-    const fetched = await Promise.all(
-      batch.map(async dfId => ({
-        dfId,
-        changes: await fetchDataflowSub(baseUrl, dfId, 'Change', sessionToken, appToken),
-      }))
-    );
-
-    for (const { dfId, changes } of fetched) {
-      for (const c of changes) {
-        try {
-          await s.run(
-            `MERGE (ch:Change { glpiId: $id })
-             SET ch.name = $name, ch.status = $status,
-                 ch.date = $date, ch.dateMod = $dateMod,
-                 ch.urgency = $urgency, ch.impact = $impact, ch.priority = $priority,
-                 ch.category = $category, ch.entity = $entity,
-                 ch.updatedAt = $now
-             WITH ch
-             MATCH (d:Dataflow { glpiId: $dfId })
-             MERGE (d)-[:HAS_CHANGE]->(ch)`,
-            {
-              id: String(c.id), name: c.name || '',
-              status: String(c.status || ''),
-              date: c.date || '', dateMod: c.date_mod || '',
-              urgency: String(c.urgency || ''), impact: String(c.impact || ''),
-              priority: String(c.priority || ''),
-              category: String(c.itilcategories_id || ''), entity: String(c.entities_id || ''),
-              now: new Date().toISOString(), dfId: String(dfId),
-            }
-          );
-          count++;
-        } catch {}
-      }
+  for (const [dfId, dfItems] of Object.entries(byDf)) {
+    for (const item of dfItems) {
+      if (item.itemtype !== 'PluginArchiswSwcomponent') continue;
+      try {
+        await s.run(
+          `MATCH (a:Application { glpiId: $itemId })
+           WITH a
+           MATCH (d:Dataflow { glpiId: $dfId })
+           MERGE (d)-[:ASSOCIATED_WITH]->(a)`,
+          { itemId: String(item.items_id), dfId }
+        );
+        count++;
+      } catch {}
     }
   }
-  return { count, dataflowsProcessed: dataflowIds.length };
-}
 
-async function runDataflowAssociatedApps(ctx) {
-  const { baseUrl, sessionToken, appToken, s } = ctx;
-  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
-  const dataflowIds = dfRes.records.map(r => r.get('id'));
-  const BATCH = 10;
-  let count = 0;
-
-  for (let i = 0; i < dataflowIds.length; i += BATCH) {
-    const batch = dataflowIds.slice(i, i + BATCH);
-
-    const fetched = await Promise.all(
-      batch.map(async dfId => ({
-        dfId,
-        apps: await fetchDataflowSub(baseUrl, dfId, 'PluginArchiswSwcomponent', sessionToken, appToken),
-      }))
-    );
-
-    for (const { dfId, apps } of fetched) {
-      for (const app of apps) {
-        const appName = app.name || String(app.id);
-        try {
-          await s.run(
-            `MERGE (a:Application { name: $name })
-             SET a.glpiId = $id, a.updatedAt = $now
-             WITH a
-             MATCH (d:Dataflow { glpiId: $dfId })
-             MERGE (d)-[:ASSOCIATED_WITH]->(a)`,
-            {
-              name: appName, id: String(app.id),
-              now: new Date().toISOString(), dfId: String(dfId),
-            }
-          );
-          count++;
-        } catch {}
-      }
-    }
-  }
-  return { count, dataflowsProcessed: dataflowIds.length };
+  return { count, totalItems: items.length };
 }
 
 // ── KILL SESSION ──────────────────────────────────────────────────────────────
@@ -1480,9 +1443,8 @@ const RUNNERS = {
   dataflow_lookups:          runDataflowLookups,
   dataflow_history:          runDataflowHistory,
   dataflows:                 runDataflows,
-  dataflow_tickets:          runDataflowTickets,
-  dataflow_changes:          runDataflowChanges,
-  dataflow_associated_apps:  runDataflowAssociatedApps,
+  dataflow_itsm_links:       runDataflowITSMLinks,
+  dataflow_associated_items: runDataflowAssociatedItems,
 };
 
 // ── ENDPOINTS ─────────────────────────────────────────────────────────────────
