@@ -4,6 +4,7 @@ const cors = require('cors');
 
 const { driver, waitForNeo4j, initSchema } = require('./lib/neo4j');
 const { auth } = require('./lib/auth');
+const { startScheduler } = require('./lib/scheduler');
 
 const app = express();
 const PORT = 4001;
@@ -55,7 +56,10 @@ app.use('/api/pipeline',  auth, require('./routes/pipeline'));
 app.listen(PORT, async () => {
   console.log(`\n◈ ARIA Backend v2.0 running on port ${PORT}`);
   const connected = await waitForNeo4j();
-  if (connected) await initSchema();
+  if (connected) {
+    await initSchema();
+    await startScheduler();
+  }
 });
 
 const shutdown = () => { driver.close(); process.exit(0); };

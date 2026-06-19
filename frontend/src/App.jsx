@@ -2248,9 +2248,9 @@ const GLPISync = ({ api }) => {
   const [activeRun, setActiveRun] = useState(null);
   const [force, setForce]       = useState(false);
   const [runError, setRunError] = useState(null);
-  const [schedule, setSchedule] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("aria_pipeline_schedule") || "{}"); } catch { return {}; }
-  });
+  const [schedule, setSchedule]   = useState({ liveInterval: "5", nightlyTime: "02:00", enabled: true });
+  const [schedSaving, setSchedSaving] = useState(false);
+  const [schedMsg, setSchedMsg]   = useState(null);
 
   const cfg          = api.cfg();
   const isConfigured = !!(cfg.glpiUrl && cfg.glpiUserToken && cfg.glpiAppToken);
@@ -2259,7 +2259,16 @@ const GLPISync = ({ api }) => {
     try { setStatus(await api.get("/api/pipeline/status")); } catch {}
   };
 
-  useEffect(() => { loadStatus(); }, []);
+  useEffect(() => {
+    loadStatus();
+    api.get("/api/pipeline/config").then(d => {
+      if (d.config) setSchedule({
+        liveInterval: d.config.liveIntervalMin || "5",
+        nightlyTime:  d.config.nightlyTime || "02:00",
+        enabled:      d.config.enabled !== false,
+      });
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!running) return;
@@ -2283,7 +2292,31 @@ const GLPISync = ({ api }) => {
     setActiveRun(null);
   };
 
-  const saveSchedule = () => localStorage.setItem("aria_pipeline_schedule", JSON.stringify(schedule));
+  const saveSchedule = async () => {
+    const c = api.cfg();
+    if (!c.glpiUrl || !c.glpiUserToken || !c.glpiAppToken) {
+      setSchedMsg({ type: "error", text: "GLPI credentials not set — configure them in Settings first" });
+      setTimeout(() => setSchedMsg(null), 5000);
+      return;
+    }
+    setSchedSaving(true);
+    setSchedMsg(null);
+    try {
+      await api.put("/api/pipeline/config", {
+        glpiUrl:         c.glpiUrl,
+        userToken:       c.glpiUserToken,
+        appToken:        c.glpiAppToken,
+        liveIntervalMin: schedule.liveInterval || "5",
+        nightlyTime:     schedule.nightlyTime  || "02:00",
+        enabled:         schedule.enabled !== false,
+      });
+      setSchedMsg({ type: "success", text: "Scheduler saved & started" });
+    } catch (e) {
+      setSchedMsg({ type: "error", text: `Save failed: ${e.message}` });
+    }
+    setSchedSaving(false);
+    setTimeout(() => setSchedMsg(null), 4000);
+  };
 
   const stages = status?.stages || [];
   const store  = status?.store  || {};
@@ -2520,7 +2553,34 @@ const GLPISync = ({ api }) => {
 
       {/* ── Refresh Schedule ── */}
       <Card style={{ padding: "16px 20px" }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: T.text, marginBottom: 14 }}>Refresh Schedule</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Refresh Schedule</div>
+          {/* Enabled toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+            onClick={() => setSchedule(s => ({ ...s, enabled: !s.enabled }))}>
+            <div style={{
+              width: 34, height: 18, borderRadius: 9, position: "relative",
+              background: schedule.enabled ? T.success : T.border,
+              transition: "background 0.2s",
+            }}>
+              <div style={{
+                position: "absolute", top: 2, left: schedule.enabled ? 16 : 2,
+                width: 14, height: 14, borderRadius: "50%", background: "#fff",
+                transition: "left 0.2s",
+              }} />
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 600, color: schedule.enabled ? T.success : T.textDim }}>
+              {schedule.enabled ? "ENABLED" : "DISABLED"}
+            </span>
+          </div>
+        </div>
+        {schedMsg && (
+          <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: T.radiusSm, fontSize: 12, fontWeight: 500,
+            background: schedMsg.type === "success" ? T.successGlow : T.dangerGlow,
+            border: `1px solid ${schedMsg.type === "success" ? T.success : T.danger}30`,
+            color: schedMsg.type === "success" ? T.success : T.danger,
+          }}>{schedMsg.text}</div>
+        )}
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div>
             <FieldLabel>Live interval (min)</FieldLabel>
@@ -2529,28 +2589,17 @@ const GLPISync = ({ api }) => {
               style={{ width: 90 }} />
           </div>
           <div>
-            <FieldLabel>Nightly time</FieldLabel>
+            <FieldLabel>Nightly time (UTC)</FieldLabel>
             <DarkInput type="time" value={schedule.nightlyTime || ""}
               onChange={e => setSchedule(s => ({ ...s, nightlyTime: e.target.value }))}
               style={{ width: 120 }} />
           </div>
-          <div>
-            <FieldLabel>Weekly day</FieldLabel>
-            <select value={schedule.weeklyDay ?? ""} onChange={e => setSchedule(s => ({ ...s, weeklyDay: e.target.value }))}
-              style={{ background: T.sidebar, color: T.text, border: `1px solid ${T.border}`, borderRadius: T.radiusSm, padding: "6px 10px", fontSize: 13, fontFamily: "inherit" }}>
-              <option value="">—</option>
-              {["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].map((d, i) => (
-                <option key={i} value={i}>{d}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <FieldLabel>Weekly time</FieldLabel>
-            <DarkInput type="time" value={schedule.weeklyTime || ""}
-              onChange={e => setSchedule(s => ({ ...s, weeklyTime: e.target.value }))}
-              style={{ width: 120 }} />
-          </div>
-          <Btn onClick={saveSchedule}>Save</Btn>
+          <Btn onClick={saveSchedule} disabled={schedSaving}>
+            {schedSaving ? "Saving…" : "Save & Activate"}
+          </Btn>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 11, color: T.textDim }}>
+          GLPI credentials are read from Settings. Live runs every N minutes; nightly runs daily at the specified UTC time.
         </div>
       </Card>
     </div>
