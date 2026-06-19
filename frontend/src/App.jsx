@@ -776,8 +776,8 @@ const KnowledgeBase = ({ api }) => {
     load();
   };
 
-  const CATS = ["all","dataflow","talend-job","application","change","ticket","project","manual","document","ai-generated"];
-  const CAT_COLORS = { dataflow: T.danger, "talend-job": "#6e40c9", application: T.accent, change: T.warning, ticket: T.success, project: T.purple, manual: T.pink, document: T.teal, "ai-generated": "#0ea5e9" };
+  const CATS = ["all", "dataflow", "application"];
+  const CAT_COLORS = { dataflow: T.danger, application: T.accent };
 
   return (
     <div>
