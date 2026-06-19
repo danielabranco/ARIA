@@ -37,8 +37,10 @@ const STAGES = [
   { id: 'dataflow_history',          label: 'Dataflow History',             tier: 'nightly', desc: 'Fetch field-change logs for all dataflows — stores DataflowLog nodes with HAS_LOG rels, updates lastActivity/lastEditor/lastLogId on each Dataflow node (incremental by log ID)', endpoint: 'GET /PluginDataflowsDataflow/{id}/Log {all dataflows, incremental}' },
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
   { id: 'dataflow_itsm_links',       label: 'Dataflow ITSM Links',          tier: 'hourly',  desc: 'Fetch all tickets, changes, problems and projects linked to dataflows via GLPI junction tables — creates HAS_TICKET, HAS_CHANGE, HAS_PROBLEM, HAS_PROJECT relationships',  endpoint: 'GET /Item_Ticket + Change_Item + Item_Problem + Item_Project {searchText[itemtype]=PluginDataflowsDataflow, all at once}' },
-  { id: 'stub_enrichment',           label: 'Stub Enrichment',              tier: 'hourly',  desc: 'Individually fetch any Ticket/Change/Problem nodes linked to dataflows that have no name — fills gaps left by deleted or access-restricted items',             endpoint: 'GET /Ticket/{id} + Change/{id} + Problem/{id} {stubs only}' },
+  { id: 'stub_enrichment',           label: 'Stub Enrichment',              tier: 'hourly',  desc: 'Individually fetch any Ticket/Change/Problem nodes linked to dataflows or applications that have no name — fills gaps left by deleted or access-restricted items', endpoint: 'GET /Ticket/{id} + Change/{id} + Problem/{id} {stubs only}' },
+  { id: 'app_itsm_links',            label: 'App ITSM Links',               tier: 'hourly',  desc: 'Fetch all tickets and changes linked to application structures via GLPI junction tables — creates HAS_TICKET, HAS_CHANGE relationships on Application nodes',   endpoint: 'GET /Item_Ticket + Change_Item {searchText[itemtype]=PluginArchiswSwcomponent, all at once}' },
   { id: 'dataflow_associated_items', label: 'Dataflow Associated Items',   tier: 'nightly', desc: 'Fetch items associated with each dataflow from PluginDataflowsDataflow_Item (apps, etc.) — groups client-side, creates ASSOCIATED_WITH relationships',         endpoint: 'GET /PluginDataflowsDataflow_Item {all at once, grouped client-side}' },
+  { id: 'app_associated_items',      label: 'App Associated Items',         tier: 'nightly', desc: 'Fetch items associated with each application from PluginArchiswSwcomponent_Item — groups client-side, creates ASSOCIATED_WITH relationships',                  endpoint: 'GET /PluginArchiswSwcomponent_Item {all at once, grouped client-side}' },
 ];
 
 const TIER_ORDER = { live: 0, hourly: 1, nightly: 2, weekly: 3 };
@@ -1373,9 +1375,9 @@ async function runDataflowITSMLinks(ctx) {
 
 async function runStubEnrichment(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
-  const tRes = await s.run('MATCH (:Dataflow)-[:HAS_TICKET]->(t:Ticket) WHERE t.name IS NULL OR t.name = "" RETURN DISTINCT t.glpiId AS id');
-  const cRes = await s.run('MATCH (:Dataflow)-[:HAS_CHANGE]->(c:Change) WHERE c.name IS NULL OR c.name = "" RETURN DISTINCT c.glpiId AS id');
-  const pRes = await s.run('MATCH (:Dataflow)-[:HAS_PROBLEM]->(p:Problem) WHERE p.name IS NULL OR p.name = "" RETURN DISTINCT p.glpiId AS id');
+  const tRes = await s.run('MATCH ()-[:HAS_TICKET]->(t:Ticket) WHERE t.name IS NULL OR t.name = "" RETURN DISTINCT t.glpiId AS id');
+  const cRes = await s.run('MATCH ()-[:HAS_CHANGE]->(c:Change) WHERE c.name IS NULL OR c.name = "" RETURN DISTINCT c.glpiId AS id');
+  const pRes = await s.run('MATCH ()-[:HAS_PROBLEM]->(p:Problem) WHERE p.name IS NULL OR p.name = "" RETURN DISTINCT p.glpiId AS id');
   const ticketIds  = tRes.records.map(r => r.get('id'));
   const changeIds  = cRes.records.map(r => r.get('id'));
   const problemIds = pRes.records.map(r => r.get('id'));
@@ -1442,6 +1444,75 @@ async function runDataflowAssociatedItems(ctx) {
            MATCH (d:Dataflow { glpiId: $dfId })
            MERGE (d)-[:ASSOCIATED_WITH]->(a)`,
           { itemId: String(item.items_id), dfId }
+        );
+        count++;
+      } catch {}
+    }
+  }
+
+  return { count, totalItems: items.length };
+}
+
+async function runAppITSMLinks(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+
+  const [itemTickets, changeItems] = await Promise.all([
+    fetchAllPages(baseUrl, 'Item_Ticket?searchText[itemtype]=PluginArchiswSwcomponent', sessionToken, appToken),
+    fetchAllPages(baseUrl, 'Change_Item?searchText[itemtype]=PluginArchiswSwcomponent', sessionToken, appToken),
+  ]);
+
+  const byApp = {};
+  const ensure = id => { if (!byApp[id]) byApp[id] = { tickets: [], changes: [] }; };
+  for (const row of itemTickets) { const id = String(row.items_id); ensure(id); byApp[id].tickets.push(String(row.tickets_id)); }
+  for (const row of changeItems) { const id = String(row.items_id); ensure(id); byApp[id].changes.push(String(row.changes_id)); }
+
+  let count = 0;
+  for (const [appId, links] of Object.entries(byApp)) {
+    for (const ticketId of links.tickets) {
+      try {
+        await s.run(
+          `MERGE (t:Ticket { glpiId: $id }) WITH t MATCH (a:Application { glpiId: $appId }) MERGE (a)-[:HAS_TICKET]->(t)`,
+          { id: ticketId, appId }
+        );
+        count++;
+      } catch {}
+    }
+    for (const changeId of links.changes) {
+      try {
+        await s.run(
+          `MERGE (c:Change { glpiId: $id }) WITH c MATCH (a:Application { glpiId: $appId }) MERGE (a)-[:HAS_CHANGE]->(c)`,
+          { id: changeId, appId }
+        );
+        count++;
+      } catch {}
+    }
+  }
+
+  return { count, tickets: itemTickets.length, changes: changeItems.length };
+}
+
+async function runAppAssociatedItems(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+
+  const items = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent_Item', sessionToken, appToken);
+
+  const byApp = {};
+  for (const row of items) {
+    const appId = String(row.plugin_archisw_swcomponents_id);
+    (byApp[appId] ??= []).push(row);
+  }
+
+  let count = 0;
+  for (const [appId, appItems] of Object.entries(byApp)) {
+    for (const item of appItems) {
+      if (!item.items_id || !item.itemtype) continue;
+      try {
+        await s.run(
+          `MATCH (a:Application { glpiId: $appId })
+           MERGE (i:GlpiItem { glpiId: $itemId, itemtype: $itemtype })
+           ON CREATE SET i.updatedAt = $now
+           MERGE (a)-[:ASSOCIATED_WITH]->(i)`,
+          { appId, itemId: String(item.items_id), itemtype: item.itemtype, now: new Date().toISOString() }
         );
         count++;
       } catch {}
@@ -1529,7 +1600,9 @@ const RUNNERS = {
   dataflows:                 runDataflows,
   dataflow_itsm_links:       runDataflowITSMLinks,
   stub_enrichment:           runStubEnrichment,
+  app_itsm_links:            runAppITSMLinks,
   dataflow_associated_items: runDataflowAssociatedItems,
+  app_associated_items:      runAppAssociatedItems,
 };
 
 // ── ENDPOINTS ─────────────────────────────────────────────────────────────────
@@ -1798,52 +1871,65 @@ router.get('/dataflow/:id/linked', async (req, res) => {
 });
 
 // GET /api/pipeline/app/:id/linked — tickets, changes and dataflows for an application
-// Tickets/changes are fetched from GLPI on-demand; dataflows come from Neo4j.
+// Tickets/changes served from Neo4j (populated by app_itsm_links stage); stubs enriched on-demand.
 router.get('/app/:id/linked', async (req, res) => {
   const s = driver.session();
   try {
-    const id  = String(req.params.id);
-    const { getConfig } = require('../lib/scheduler');
-    const cfg = await getConfig();
-    if (!cfg || !cfg.glpiUrl) return res.status(503).json({ error: 'No stored pipeline config' });
+    const id = String(req.params.id);
 
-    const base  = cfg.glpiUrl.replace(/\/$/, '');
-    const agent = base.startsWith('https') ? httpsAgent : undefined;
+    const tRes  = await s.run(`MATCH (a:Application { glpiId: $id })-[:HAS_TICKET]->(t:Ticket) RETURN t { .* } AS t ORDER BY t.dateMod DESC LIMIT 200`, { id });
+    const cRes  = await s.run(`MATCH (a:Application { glpiId: $id })-[:HAS_CHANGE]->(c:Change)  RETURN c { .* } AS c ORDER BY c.dateMod DESC LIMIT 200`, { id });
+    const dfRes = await s.run(
+      `MATCH (a:Application { glpiId: $id })-[:FEEDS_INTO|CONNECTS_TO]-(d:Dataflow)
+       WHERE d.glpiId IS NOT NULL AND d.glpiId <> ''
+       RETURN DISTINCT d { .* } AS d ORDER BY d.name`,
+      { id }
+    );
 
-    // Authenticate with GLPI
-    enforceGetOnly('GET');
-    const sessRes = await fetch(`${base}/apirest.php/initSession`, {
-      method: 'GET',
-      headers: { 'Authorization': `user_token ${cfg.glpiUserToken}`, 'App-Token': cfg.glpiAppToken },
-      agent,
-    });
-    const sessData = await sessRes.json();
-    if (!sessData.session_token) return res.status(401).json({ error: 'GLPI auth failed', detail: sessData });
-    const sessionToken = sessData.session_token;
+    let tickets = tRes.records.map(r => r.get('t'));
+    let changes = cRes.records.map(r => r.get('c'));
 
-    // Parallel: GLPI ticket/change fetches (via junction tables) + Neo4j dataflow query
-    const [tickets, changes, dfRes] = await Promise.all([
-      fetchAppLinkedItems(base, id, 'Item_Ticket', 'Ticket', sessionToken, cfg.glpiAppToken)
-        .then(rows => rows.map(t => ({ id: t.id, name: t.name, status: t.status, priority: t.priority, itilcategories_id: t.itilcategories_id, date_mod: t.date_mod, date: t.date }))),
-      fetchAppLinkedItems(base, id, 'Item_Change', 'Change', sessionToken, cfg.glpiAppToken)
-        .then(rows => rows.map(c => ({ id: c.id, name: c.name, status: c.status, priority: c.priority, itilcategories_id: c.itilcategories_id, date_mod: c.date_mod, date: c.date }))),
-      s.run(
-        `MATCH (a:Application { glpiId: $id })-[:FEEDS_INTO|CONNECTS_TO]-(d:Dataflow)
-         WHERE d.glpiId IS NOT NULL AND d.glpiId <> ''
-         RETURN DISTINCT d { .* } AS d ORDER BY d.name`,
-        { id }
-      ),
-    ]);
+    // On-demand enrichment for stubs (no name) — same pattern as /dataflow/:id/linked
+    const stubTickets = tickets.filter(t => !t.name);
+    const stubChanges = changes.filter(c => !c.name);
+    if (stubTickets.length > 0 || stubChanges.length > 0) {
+      const { getConfig } = require('../lib/scheduler');
+      const cfg = await getConfig();
+      if (cfg && cfg.glpiUrl) {
+        const base  = cfg.glpiUrl.replace(/\/$/, '');
+        const agent = base.startsWith('https') ? httpsAgent : undefined;
+        enforceGetOnly('GET');
+        const sessRes  = await fetch(`${base}/apirest.php/initSession`, { method: 'GET', headers: { 'Authorization': `user_token ${cfg.glpiUserToken}`, 'App-Token': cfg.glpiAppToken }, agent });
+        const sessData = await sessRes.json();
+        if (sessData.session_token) {
+          const token = sessData.session_token;
+          for (const t of stubTickets) {
+            const item = await glpiFetch(base, `Ticket/${t.glpiId}`, token, cfg.glpiAppToken);
+            if (!item || item.error || !item.id) continue;
+            await s.run(`MERGE (t:Ticket { glpiId: $id }) SET t.name = $name, t.status = $status, t.priority = $priority, t.date = $date, t.dateMod = $dateMod, t.updatedAt = $now`,
+              { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), priority: String(item.priority ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() });
+            t.name = item.name || ''; t.status = String(item.status ?? ''); t.priority = String(item.priority ?? '');
+          }
+          for (const c of stubChanges) {
+            const item = await glpiFetch(base, `Change/${c.glpiId}`, token, cfg.glpiAppToken);
+            if (!item || item.error || !item.id) continue;
+            await s.run(`MERGE (c:Change { glpiId: $id }) SET c.name = $name, c.status = $status, c.date = $date, c.dateMod = $dateMod, c.updatedAt = $now`,
+              { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() });
+            c.name = item.name || ''; c.status = String(item.status ?? '');
+          }
+          fetch(`${base}/apirest.php/killSession`, { method: 'GET', headers: glpiHeaders(token, cfg.glpiAppToken), agent }).catch(() => {});
+        }
+      }
+    }
 
-    // Kill GLPI session (best-effort)
-    fetch(`${base}/apirest.php/killSession`, { method: 'GET', headers: glpiHeaders(sessionToken, cfg.glpiAppToken), agent }).catch(() => {});
-
+    const mapTicket = t => ({ id: t.glpiId, name: t.name, status: t.status, priority: t.priority, itilcategories_id: t.category, date_mod: t.dateMod, date: t.date });
+    const mapChange = c => ({ id: c.glpiId, name: c.name, status: c.status, priority: c.priority, itilcategories_id: c.category, date_mod: c.dateMod, date: c.date });
     const dataflows = dfRes.records.map(r => {
       const d = r.get('d');
       return { id: d.glpiId, name: d.name, desc: d.desc || d.description || '', status: d.status };
     });
 
-    res.json({ tickets, changes, dataflows });
+    res.json({ tickets: tickets.map(mapTicket), changes: changes.map(mapChange), dataflows });
   } catch (e) { res.status(500).json({ error: e.message }); }
   finally { await s.close(); }
 });
