@@ -31,6 +31,7 @@ const STAGES = [
   { id: 'validation_history',        label: 'Validation History',          tier: 'live',    desc: 'Fetch ticket and change validation records incrementally',                                                                                              endpoint: 'GET /Ticket/{id}/TicketValidation + Change/{id}/ChangeValidation {incremental}' },
   { id: 'field_change_history',      label: 'Field Change History',        tier: 'live',    desc: 'Fetch field-level change logs for open tickets (incremental)',                                                                                          endpoint: 'GET /Ticket/{id}/log {open tickets, incremental}' },
   { id: 'app_structures',            label: 'App Structures',               tier: 'nightly', desc: 'Fetch application structures — upserts Application nodes and Knowledge entries, builds appIdMap for dataflow resolution',                                      endpoint: 'GET /PluginArchiswSwcomponent {expand_dropdowns, is_deleted=0}' },
+  { id: 'app_structures_history',    label: 'App Structures History',       tier: 'nightly', desc: 'Fetch field-change logs for all application nodes — stores AppLog nodes, updates lastActivity and lastEditor on each Application node (incremental by log ID)',      endpoint: 'GET /PluginArchiswSwcomponent/{id}/Log {all apps, incremental}' },
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
   { id: 'dataflow_tickets',         label: 'Dataflow Tickets',             tier: 'hourly',  desc: 'Fetch all tickets linked to each dataflow — upserts Ticket nodes and creates HAS_TICKET relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Ticket {all dataflows}' },
   { id: 'dataflow_changes',         label: 'Dataflow Changes',             tier: 'hourly',  desc: 'Fetch all changes linked to each dataflow — upserts Change nodes and creates HAS_CHANGE relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Change {all dataflows}' },
@@ -764,6 +765,108 @@ async function runAppStructures(ctx) {
   return { count };
 }
 
+// Fetch one app's sub-items from PluginArchiswSwcomponent with a 20 s hard timeout.
+const fetchAppSub = async (baseUrl, appId, subType, sessionToken, appToken) => {
+  const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
+  const url = `${baseUrl}/apirest.php/PluginArchiswSwcomponent/${appId}/${subType}?range=0-999&expand_dropdowns=true`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    enforceGetOnly('GET');
+    const r = await fetch(url, {
+      method: 'GET',
+      headers: { 'Session-Token': sessionToken, 'App-Token': appToken, 'Content-Type': 'application/json' },
+      agent,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (r.status !== 200 && r.status !== 206) return [];
+    const body = await r.json();
+    return Array.isArray(body) ? body : (body.data || []);
+  } catch {
+    clearTimeout(timer);
+    return [];
+  }
+};
+
+async function runAppStructuresHistory(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const now = new Date().toISOString();
+
+  // Load all Application nodes with their last-seen log ID for incremental sync
+  const appRes = await s.run(`MATCH (a:Application) WHERE a.glpiId IS NOT NULL AND a.glpiId <> '' RETURN a.glpiId AS id, coalesce(a.lastLogId, '0') AS lastLogId`);
+  const apps = appRes.records.map(r => ({ id: r.get('id'), lastLogId: parseInt(r.get('lastLogId'), 10) || 0 }));
+
+  const BATCH = 10;
+  let count = 0;
+
+  for (let i = 0; i < apps.length; i += BATCH) {
+    const batch = apps.slice(i, i + BATCH);
+
+    const fetched = await Promise.all(
+      batch.map(async ({ id, lastLogId }) => {
+        const logs = await fetchAppSub(baseUrl, id, 'Log', sessionToken, appToken);
+        const newLogs = logs.filter(l => l.id > lastLogId);
+        return { id, newLogs };
+      })
+    );
+
+    for (const { id, newLogs } of fetched) {
+      if (!newLogs.length) continue;
+
+      for (const log of newLogs) {
+        try {
+          await s.run(
+            `MERGE (l:AppLog { glpiId: $logId })
+             SET l.appId       = $appId,
+                 l.action      = $action,
+                 l.user        = $user,
+                 l.date        = $date,
+                 l.fieldOption = $fieldOpt,
+                 l.oldValue    = $old,
+                 l.newValue    = $new,
+                 l.updatedAt   = $now
+             WITH l
+             MATCH (a:Application { glpiId: $appId })
+             MERGE (a)-[:HAS_LOG]->(l)`,
+            {
+              logId:    String(log.id),
+              appId:    String(id),
+              action:   String(log.linked_action ?? ''),
+              user:     String(log.user_name || ''),
+              date:     String(log.date_mod || ''),
+              fieldOpt: String(log.id_search_option ?? ''),
+              old:      String(log.old_value || ''),
+              new:      String(log.new_value || ''),
+              now,
+            }
+          );
+          count++;
+        } catch {}
+      }
+
+      // Update lastActivity, lastEditor and lastLogId on the Application node
+      const latest = newLogs.reduce((a, b) => (a.id > b.id ? a : b));
+      try {
+        await s.run(
+          `MATCH (a:Application { glpiId: $appId })
+           SET a.lastActivity = $date,
+               a.lastEditor   = $user,
+               a.lastLogId    = $logId`,
+          {
+            appId:  String(id),
+            date:   String(latest.date_mod || ''),
+            user:   String(latest.user_name || ''),
+            logId:  String(latest.id),
+          }
+        );
+      } catch {}
+    }
+  }
+
+  return { count, appsProcessed: apps.length };
+}
+
 async function runDataflows(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
   const INACTIVE = ['removed', 'stopped', 'inactive', 'deleted'];
@@ -1123,6 +1226,7 @@ const RUNNERS = {
   validation_history:        runValidationHistory,
   field_change_history:      runFieldChangeHistory,
   app_structures:            runAppStructures,
+  app_structures_history:    runAppStructuresHistory,
   dataflows:                 runDataflows,
   dataflow_tickets:          runDataflowTickets,
   dataflow_changes:          runDataflowChanges,
