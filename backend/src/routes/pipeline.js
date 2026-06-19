@@ -771,17 +771,25 @@ async function runAppStructures(ctx) {
         linkRow('Repository',     appRepo),
       ].filter(v => v !== null && v !== undefined).join('\n');
 
+      // toString() handles glpiId stored as integer by older sync runs
       const kRes = await s.run(
-        `MATCH (k:Knowledge) WHERE k.category = 'application' AND k.glpiId = $glpiId RETURN k.id AS id`,
+        `MATCH (k:Knowledge) WHERE k.category = 'application' AND toString(k.glpiId) = $glpiId
+         RETURN k.id AS id ORDER BY k.createdAt ASC`,
         { glpiId: appId }
       );
       if (kRes.records.length > 0) {
+        const keepId = kRes.records[0].get('id');
+        // Remove duplicates created by the type mismatch
+        if (kRes.records.length > 1) {
+          const dupeIds = kRes.records.slice(1).map(r => r.get('id'));
+          await s.run(`MATCH (k:Knowledge) WHERE k.id IN $ids DETACH DELETE k`, { ids: dupeIds });
+        }
         await s.run(
           `MATCH (k:Knowledge) WHERE k.id = $id
-           SET k.topic = $topic, k.content = $content,
+           SET k.topic = $topic, k.content = $content, k.glpiId = $glpiId,
                k.supplier = $supplier, k.urlProd = $urlProd, k.urlQA = $urlQA,
                k.owner = $owner, k.sla = $sla, k.glpiSyncedAt = $now`,
-          { id: kRes.records[0].get('id'), topic: appTopic, content,
+          { id: keepId, topic: appTopic, content, glpiId: appId,
             supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
             owner: appOwner, sla: appSla, now }
         );
