@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const fetch = require('node-fetch');
+const { v4: uuid } = require('uuid');
 const { driver } = require('../lib/neo4j');
 const { httpsAgent } = require('../lib/https-agent');
 const { auditLog } = require('../lib/audit');
@@ -34,6 +35,8 @@ const STAGES = [
   { id: 'validation_history',        label: 'Validation History',          tier: 'live',    desc: 'Fetch ticket and change validation records incrementally',                                                                                              endpoint: 'GET /Ticket/{id}/TicketValidation + Change/{id}/ChangeValidation {incremental}' },
   { id: 'field_change_history',      label: 'Field Change History',        tier: 'live',    desc: 'Fetch field-level change logs for open tickets (incremental)',                                                                                          endpoint: 'GET /Ticket/{id}/log {open tickets, incremental}' },
   { id: 'knowledge_base_cache',      label: 'Knowledge Base Cache',        tier: 'live',    desc: 'Paginate and cache all GLPI knowledge base articles',                                                                                                   endpoint: 'GET /KnowledgeBase {paginated}' },
+  { id: 'app_structures',            label: 'App Structures',               tier: 'nightly', desc: 'Fetch application structures — upserts Application nodes and Knowledge entries, builds appIdMap for dataflow resolution',                                      endpoint: 'GET /PluginArchiswSwcomponent {expand_dropdowns, is_deleted=0}' },
+  { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
 ];
 
 const TIER_ORDER = { live: 0, hourly: 1, nightly: 2, weekly: 3 };
@@ -760,6 +763,245 @@ async function runFieldChangeHistory(ctx) {
   return { count, ticketsProcessed: toProcess.length };
 }
 
+async function runAppStructures(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const INACTIVE = ['removed', 'deleted', 'inactive'];
+  const items = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent?expand_dropdowns=true&is_deleted=0', sessionToken, appToken);
+
+  ctx.appIdMap = new Map();
+  let count = 0;
+
+  for (const item of items) {
+    const rawStatus = String(item.states_id || '').toLowerCase();
+    if (INACTIVE.some(s => rawStatus.includes(s))) continue;
+
+    const appId       = String(item.id);
+    const appName     = item.name || appId;
+    ctx.appIdMap.set(appId, appName);
+
+    const appType       = String(item.plugin_archisw_swcomponenttypes_id || item.swcomponenttypes_id || '');
+    const appEntity     = String(item.entities_id || '');
+    const appDesc       = item.shortdescription || item.description || '';
+    const appComment    = item.comment || '';
+    const appStatus     = String(item.states_id || '');
+    const appSupplier   = String(item.suppliers_id || '');
+    const appUrlProd    = item.url_prod || '';
+    const appUrlQA      = item.url_qa || '';
+    const appOwner      = String(item.groups_id || '');
+    const appSla        = String(item.plugin_archisw_swcomponentslas_id || '');
+    const appInstances  = String(item.plugin_archisw_swcomponentinstances_id || '');
+    const appDatabase   = String(item.plugin_archisw_swcomponentdbs_id || '');
+    const appLocation   = String(item.locations_id || '');
+    const appTargets    = String(item.plugin_archisw_swcomponenttargets_id || '');
+    const appDevLang    = String(item.plugin_archisw_swcomponenttechnics_id || '');
+    const appInUseSince = String(item.plugin_archisw_inusesinceyear || '');
+    const now = new Date().toISOString();
+
+    await s.run(
+      `MERGE (a:Application { name: $name })
+       SET a.glpiId = $id, a.type = $type, a.entity = $entity,
+           a.description = $desc, a.comment = $comment,
+           a.supplier = $supplier, a.urlProd = $urlProd, a.urlQA = $urlQA,
+           a.owner = $owner, a.sla = $sla, a.instances = $instances,
+           a.database = $database, a.location = $location, a.targets = $targets,
+           a.status = $status, a.devLanguage = $devLang, a.inUseSince = $inUseSince,
+           a.updatedAt = $now`,
+      {
+        name: appName, id: appId, type: appType, entity: appEntity,
+        desc: appDesc, comment: appComment, status: appStatus,
+        supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
+        owner: appOwner, sla: appSla, instances: appInstances,
+        database: appDatabase, location: appLocation, targets: appTargets,
+        devLang: appDevLang, inUseSince: appInUseSince, now,
+      }
+    );
+
+    // Knowledge upsert — mirrors sync.js appstructs block exactly
+    try {
+      const appTopic = `Application #${appId} — ${appName}`;
+      const liveLines = ['GLPI LIVE DATA (auto-updated by sync):'];
+      liveLines.push(`GLPI ID: ${appId}`);
+      if (appStatus)     liveLines.push(`Status: ${appStatus}`);
+      if (appType)       liveLines.push(`Type: ${appType}`);
+      if (appOwner)      liveLines.push(`Owner: ${appOwner}`);
+      if (appSupplier)   liveLines.push(`Supplier: ${appSupplier}`);
+      if (appSla)        liveLines.push(`Service Level: ${appSla}`);
+      if (appInstances)  liveLines.push(`Instances: ${appInstances}`);
+      if (appDatabase)   liveLines.push(`Database: ${appDatabase}`);
+      if (appDevLang)    liveLines.push(`Dev Language: ${appDevLang}`);
+      if (appLocation)   liveLines.push(`Location: ${appLocation}`);
+      if (appTargets)    liveLines.push(`Targets: ${appTargets}`);
+      if (appInUseSince) liveLines.push(`In Use Since: ${appInUseSince}`);
+      if (appUrlProd)    liveLines.push(`URL Production: ${appUrlProd}`);
+      if (appUrlQA)      liveLines.push(`URL QA: ${appUrlQA}`);
+      liveLines.push(`Last synced: ${now.split('T')[0]}`);
+      const glpiLiveBlock = liveLines.join('\n');
+
+      const kRes = await s.run(
+        `MATCH (k:Knowledge) WHERE k.category = 'application' AND k.glpiId = $glpiId RETURN k.id AS id, k.content AS content`,
+        { glpiId: appId }
+      );
+      if (kRes.records.length > 0) {
+        for (const rec of kRes.records) {
+          const existing = rec.get('content') || '';
+          const stripped = existing.replace(/\n*GLPI LIVE DATA \(auto-updated by sync\):[\s\S]*$/, '').trim();
+          const newContent = stripped ? stripped + '\n\n' + glpiLiveBlock : glpiLiveBlock;
+          await s.run(
+            `MATCH (k:Knowledge) WHERE k.id = $id
+             SET k.topic = $topic, k.content = $content,
+                 k.supplier = $supplier, k.urlProd = $urlProd,
+                 k.urlQA = $urlQA, k.owner = $owner, k.sla = $sla,
+                 k.glpiSyncedAt = $now`,
+            { id: rec.get('id'), topic: appTopic, content: newContent,
+              supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
+              owner: appOwner, sla: appSla, now }
+          );
+        }
+      } else {
+        const baseContent = (appDesc || appComment ? (appDesc || appComment) + '\n\n' : '') + glpiLiveBlock;
+        await s.run(
+          `CREATE (k:Knowledge {
+             id: $id, topic: $topic, content: $content,
+             category: 'application', source: 'glpi-sync',
+             glpiId: $glpiId, reviewStatus: 'to_be_reviewed',
+             supplier: $supplier, urlProd: $urlProd, urlQA: $urlQA,
+             owner: $owner, sla: $sla, glpiSyncedAt: $now,
+             tags: ['application','glpi'], createdAt: $now
+           })`,
+          { id: uuid(), topic: appTopic, content: baseContent, glpiId: appId,
+            supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
+            owner: appOwner, sla: appSla, now }
+        );
+      }
+    } catch {}
+
+    count++;
+  }
+  return { count };
+}
+
+async function runDataflows(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const INACTIVE = ['removed', 'stopped', 'inactive', 'deleted'];
+
+  // Use appIdMap built by runAppStructures if available, else fetch it now
+  if (!ctx.appIdMap) {
+    ctx.appIdMap = new Map();
+    try {
+      const apps = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent?expand_dropdowns=true&is_deleted=0', sessionToken, appToken);
+      for (const a of apps) { if (a.id && a.name) ctx.appIdMap.set(String(a.id), a.name); }
+    } catch {}
+  }
+
+  const resolveApp = (val) => {
+    if (!val || val === '0') return '';
+    const v = String(val);
+    return /^\d+$/.test(v) ? (ctx.appIdMap.get(v) || v) : v;
+  };
+
+  const items = await fetchAllPages(baseUrl, 'PluginDataflowsDataflow?expand_dropdowns=true&is_deleted=0', sessionToken, appToken);
+  let count = 0;
+
+  for (const item of items) {
+    const rawStatus = String(item.plugin_dataflows_states_id || '').toLowerCase();
+    if (INACTIVE.some(s => rawStatus.includes(s))) continue;
+
+    const dfId         = String(item.id);
+    const dfName       = item.name || dfId;
+    const dfStatusRaw  = String(item.plugin_dataflows_states_id || '');
+    const dfComplexity = String(item.plugin_dataflows_types_id || '');
+    const dfProtocol   = String(item.plugin_dataflows_transferprotocols_id || '');
+    const dfFlowGroup  = String(item.plugin_dataflows_flowgroups_id || '');
+    const dfDesc       = item.shortdescription || '';
+    const src          = resolveApp(item.plugin_dataflows_fromswcomponents_id);
+    const dst          = resolveApp(item.plugin_dataflows_toswcomponents_id);
+    const now          = new Date().toISOString();
+
+    await s.run(
+      `MERGE (d:Dataflow { glpiId: $id })
+       SET d.name = $name, d.status = $status, d.complexity = $complexity,
+           d.protocol = $protocol, d.flowGroup = $flowGroup,
+           d.trigger = $trigger, d.frequency = $frequency,
+           d.sourceApp = $src, d.destApp = $dst,
+           d.owner = $owner, d.group = $grp,
+           d.indicator = $indicator, d.mappingDoc = $mDoc,
+           d.technicalDoc = $tDoc, d.description = $desc,
+           d.updatedAt = $now`,
+      {
+        id: dfId, name: dfName, status: dfStatusRaw,
+        complexity: dfComplexity, protocol: dfProtocol, flowGroup: dfFlowGroup,
+        trigger: String(item.plugin_dataflows_triggertypes_id || ''),
+        frequency: String(item.plugin_dataflows_transferfreqs_id || ''),
+        src, dst, owner: String(item.users_id || ''), grp: String(item.groups_id || ''),
+        indicator: String(item.plugin_dataflows_indicators_id || ''),
+        mDoc: item.mappingdocurl || '', tDoc: item.technicaldocurl || '',
+        desc: dfDesc, now,
+      }
+    );
+
+    // Knowledge upsert — mirrors sync.js dataflows block exactly
+    try {
+      const dfTopic = `Dataflow #${dfId} — ${dfName}`;
+      const dfContent = [
+        dfDesc || dfName, '',
+        'GLPI LIVE DATA (auto-updated by sync):',
+        `GLPI ID: ${dfId}`,
+        `From: ${src || 'unknown'} -> To: ${dst || 'unknown'}`,
+        dfStatusRaw  ? `Status: ${dfStatusRaw}`     : '',
+        dfComplexity ? `Complexity: ${dfComplexity}` : '',
+        dfProtocol   ? `Protocol: ${dfProtocol}`     : '',
+        dfFlowGroup  ? `Flow Group: ${dfFlowGroup}`  : '',
+        `Last synced: ${now.split('T')[0]}`,
+      ].filter(Boolean).join('\n');
+
+      const kRes = await s.run(
+        `MATCH (k:Knowledge) WHERE k.category = 'dataflow' AND k.glpiId = $glpiId RETURN k.id AS id`,
+        { glpiId: dfId }
+      );
+      if (kRes.records.length === 0) {
+        await s.run(
+          `CREATE (k:Knowledge {
+             id: $id, topic: $topic, content: $content,
+             category: 'dataflow', source: 'glpi-sync',
+             glpiId: $glpiId, reviewStatus: 'to_be_reviewed',
+             tags: ['dataflow','glpi'], createdAt: $now
+           })`,
+          { id: uuid(), topic: dfTopic, content: dfContent, glpiId: dfId, now }
+        );
+      } else {
+        for (const rec of kRes.records) {
+          await s.run(
+            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.glpiSyncedAt = $now`,
+            { id: rec.get('id'), topic: dfTopic, content: dfContent, now }
+          );
+        }
+      }
+    } catch {}
+
+    // Relationships — mirrors sync.js exactly
+    if (src) await s.run(
+      `MERGE (a:Application { name: $name }) SET a.updatedAt = $now
+       WITH a MATCH (d:Dataflow { glpiId: $dfId }) MERGE (a)-[:FEEDS_INTO]->(d)`,
+      { name: src, dfId, now }
+    ).catch(() => {});
+    if (dst) await s.run(
+      `MERGE (a:Application { name: $name }) SET a.updatedAt = $now
+       WITH a MATCH (d:Dataflow { glpiId: $dfId }) MERGE (d)-[:FEEDS_INTO]->(a)`,
+      { name: dst, dfId, now }
+    ).catch(() => {});
+    if (src && dst) await s.run(
+      `MERGE (s:Application { name: $src })
+       MERGE (t:Application { name: $dst })
+       MERGE (s)-[r:CONNECTS_TO]->(t)
+       SET r.via = coalesce(r.via, $via), r.updatedAt = $now`,
+      { src, dst, via: dfName, now }
+    ).catch(() => {});
+
+    count++;
+  }
+  return { count };
+}
+
 async function runKnowledgeBaseCache(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
   const items = await fetchAllPages(baseUrl, 'KnowledgeBase?expand_dropdowns=true', sessionToken, appToken);
@@ -854,6 +1096,8 @@ const RUNNERS = {
   validation_history:        runValidationHistory,
   field_change_history:      runFieldChangeHistory,
   knowledge_base_cache:      runKnowledgeBaseCache,
+  app_structures:            runAppStructures,
+  dataflows:                 runDataflows,
 };
 
 // ── ENDPOINTS ─────────────────────────────────────────────────────────────────
