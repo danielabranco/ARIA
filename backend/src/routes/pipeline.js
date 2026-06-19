@@ -20,6 +20,7 @@ const STAGES = [
   { id: 'followup_analysis',    label: 'Followup Analysis',      tier: 'live',    desc: 'Determine last-touch author type per open ticket (pull-in-count)',                                             endpoint: 'GET /Ticket/{id}/ITILFollowup {open tickets}' },
   { id: 'change_field_discovery', label: 'Change Field Discovery', tier: 'nightly', desc: 'Discover plugin field IDs (runs once, cached in meta table)',                                               endpoint: 'GET /listSearchOptions/Change' },
   { id: 'change_records',            label: 'Change Records',              tier: 'hourly',  desc: 'Fetch Change records — incremental after first run (only re-fetches records modified since last sync, full on first run or force flag trigger)',   endpoint: 'GET /search/Change {2yr window}' },
+  { id: 'problem_records',          label: 'Problem Records',             tier: 'hourly',  desc: 'Fetch Problem records — incremental after first run, upserts Problem nodes with name, status, priority, urgency, impact',                         endpoint: 'GET /search/Problem {2yr window}' },
   { id: 'release_records',           label: 'Release Records',             tier: 'hourly',  desc: 'Fetch GLPI release objects and sub-documents',                                                                                                         endpoint: 'GET /PluginReleaseRelease' },
   { id: 'ticket_change_links',       label: 'Ticket-Change Links',         tier: 'hourly',  desc: 'Resolve ticket↔change links for active changes',                                                                                                       endpoint: 'GET /Change/{id}/Change_Ticket {active changes only}' },
   { id: 'cab_validations',           label: 'CAB Validations',             tier: 'hourly',  desc: 'Fetch change-approval records for active changes',                                                                                                      endpoint: 'GET /Change/{id}/ChangeValidation {active changes only}' },
@@ -362,6 +363,41 @@ async function runChangeRecords(ctx) {
       `MERGE (c:Change { glpiId: $id })
        SET c.name = $name, c.status = $status, c.date = $date, c.dateMod = $dateMod, c.updatedAt = $now`,
       { id, name, status, date, dateMod, now: new Date().toISOString() }
+    );
+    count++;
+  }
+  return { count, incremental: !!lastSync };
+}
+
+async function runProblemRecords(ctx) {
+  const { baseUrl, sessionToken, appToken, s, meta, force } = ctx;
+  const lastSync = !force && meta.problem_records?.lastSuccessAt
+    ? meta.problem_records.lastSuccessAt.slice(0, 19).replace('T', ' ')
+    : null;
+  const from = lastSync || twoYearsAgo();
+  const criteria = [
+    `criteria[0][field]=19&criteria[0][searchtype]=morethan&criteria[0][value]=${encodeURIComponent(from)}`,
+    'forcedisplay[0]=1&forcedisplay[1]=2&forcedisplay[2]=12&forcedisplay[3]=3&forcedisplay[4]=10&forcedisplay[5]=11&forcedisplay[6]=15&forcedisplay[7]=19',
+  ].join('&');
+  const items = await fetchSearchPages(baseUrl, `search/Problem?${criteria}&order=DESC&sort=19`, sessionToken, appToken);
+
+  let count = 0;
+  for (const item of items) {
+    const id       = String(item['1']  || item.id       || '');
+    const name     = String(item['2']  || item.name     || '');
+    const status   = String(item['12'] || item.status   || '');
+    const priority = String(item['3']  || item.priority || '');
+    const urgency  = String(item['10'] || item.urgency  || '');
+    const impact   = String(item['11'] || item.impact   || '');
+    const date     = String(item['15'] || item.date     || '');
+    const dateMod  = String(item['19'] || item.date_mod || '');
+    if (!id) continue;
+    await s.run(
+      `MERGE (p:Problem { glpiId: $id })
+       SET p.name = $name, p.status = $status, p.priority = $priority,
+           p.urgency = $urgency, p.impact = $impact,
+           p.date = $date, p.dateMod = $dateMod, p.updatedAt = $now`,
+      { id, name, status, priority, urgency, impact, date, dateMod, now: new Date().toISOString() }
     );
     count++;
   }
@@ -1325,80 +1361,12 @@ async function runDataflowITSMLinks(ctx) {
     }
   }
 
-  // ④ Enrich stubs: fetch name/status from GLPI for every linked item (parallel batches of 20)
-  const ITIL_STATUS = { 1: 'New', 2: 'Processing (assigned)', 3: 'Processing (planned)', 4: 'Pending', 5: 'Solved', 6: 'Closed' };
-  const batchFetch = async (glpiType, ids) => {
-    const BATCH = 20;
-    const out = [];
-    for (let i = 0; i < ids.length; i += BATCH) {
-      const slice = ids.slice(i, i + BATCH);
-      const results = await Promise.all(slice.map(async id => {
-        try {
-          const data = await glpiFetch(baseUrl, `${glpiType}/${id}?expand_dropdowns=true`, sessionToken, appToken);
-          return (data && !data.error && (data.id || data.name)) ? { id, data } : null;
-        } catch { return null; }
-      }));
-      out.push(...results.filter(Boolean));
-    }
-    return out;
-  };
-
-  const uniqueTicketIds  = [...new Set(itemTickets.map(r => String(r.tickets_id)))];
-  const uniqueChangeIds  = [...new Set(changeItems.map(r => String(r.changes_id)))];
-  const uniqueProblemIds = [...new Set(itemProblems.map(r => String(r.problems_id)))];
-
-  const [ticketDetails, changeDetails, problemDetails] = await Promise.all([
-    batchFetch('Ticket', uniqueTicketIds),
-    batchFetch('Change',  uniqueChangeIds),
-    batchFetch('Problem', uniqueProblemIds),
-  ]);
-
-  for (const { id, data } of ticketDetails) {
-    try {
-      await s.run(
-        `MATCH (t:Ticket { glpiId: $id })
-         SET t.name = $name, t.status = $status, t.statusLabel = $statusLabel,
-             t.priority = $priority, t.date = $date, t.dateMod = $dateMod, t.category = $category`,
-        { id, name: data.name || '', status: String(data.status || ''),
-          statusLabel: ITIL_STATUS[data.status] || '', priority: String(data.priority || ''),
-          date: data.date || '', dateMod: data.date_mod || '',
-          category: String(data.itilcategories_id || '') }
-      );
-    } catch {}
-  }
-  for (const { id, data } of changeDetails) {
-    try {
-      await s.run(
-        `MATCH (c:Change { glpiId: $id })
-         SET c.name = $name, c.status = $status, c.statusLabel = $statusLabel,
-             c.priority = $priority, c.date = $date, c.dateMod = $dateMod, c.category = $category`,
-        { id, name: data.name || '', status: String(data.status || ''),
-          statusLabel: ITIL_STATUS[data.status] || '', priority: String(data.priority || ''),
-          date: data.date || '', dateMod: data.date_mod || '',
-          category: String(data.itilcategories_id || '') }
-      );
-    } catch {}
-  }
-  for (const { id, data } of problemDetails) {
-    try {
-      await s.run(
-        `MATCH (p:Problem { glpiId: $id })
-         SET p.name = $name, p.status = $status, p.statusLabel = $statusLabel,
-             p.priority = $priority, p.date = $date, p.dateMod = $dateMod`,
-        { id, name: data.name || '', status: String(data.status || ''),
-          statusLabel: ITIL_STATUS[data.status] || '', priority: String(data.priority || ''),
-          date: data.date || '', dateMod: data.date_mod || '' }
-      );
-    } catch {}
-  }
-
   return {
     count,
     tickets: itemTickets.length,
     changes: changeItems.length,
     problems: itemProblems.length,
     projects: itemProjects.length,
-    enriched: ticketDetails.length + changeDetails.length + problemDetails.length,
   };
 }
 
@@ -1496,6 +1464,7 @@ const RUNNERS = {
   followup_analysis:         runFollowupAnalysis,
   change_field_discovery:    runChangeFieldDiscovery,
   change_records:            runChangeRecords,
+  problem_records:           runProblemRecords,
   release_records:           runReleaseRecords,
   ticket_change_links:       runTicketChangeLinks,
   cab_validations:           runCabValidations,
