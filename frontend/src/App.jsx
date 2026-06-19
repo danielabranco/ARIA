@@ -2463,8 +2463,10 @@ const GLPISync = ({ api }) => {
                       <div style={{ fontSize: 10, color: T.textDim, lineHeight: 1.8 }}>
                         {startTime && <div><span style={{ color: T.success }}>▷</span> {startTime}</div>}
                         {endTime   && <div><span style={{ color: T.textDim }}>▪</span> {endTime}</div>}
-                        {stage.count > 0 && (
-                          <div style={{ fontWeight: 700, color: T.accent, fontSize: 11 }}>{stage.count.toLocaleString()}</div>
+                        {stage.lastRun && (
+                          <div style={{ fontWeight: 700, color: stage.count > 0 ? T.accent : T.textDim, fontSize: 11 }}>
+                            {stage.count.toLocaleString()}
+                          </div>
                         )}
                       </div>
                     </td>
