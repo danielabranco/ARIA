@@ -32,6 +32,9 @@ const STAGES = [
   { id: 'field_change_history',      label: 'Field Change History',        tier: 'live',    desc: 'Fetch field-level change logs for open tickets (incremental)',                                                                                          endpoint: 'GET /Ticket/{id}/log {open tickets, incremental}' },
   { id: 'app_structures',            label: 'App Structures',               tier: 'nightly', desc: 'Fetch application structures — upserts Application nodes and Knowledge entries, builds appIdMap for dataflow resolution',                                      endpoint: 'GET /PluginArchiswSwcomponent {expand_dropdowns, is_deleted=0}' },
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
+  { id: 'dataflow_tickets',         label: 'Dataflow Tickets',             tier: 'hourly',  desc: 'Fetch all tickets linked to each dataflow — upserts Ticket nodes and creates HAS_TICKET relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Ticket {all dataflows}' },
+  { id: 'dataflow_changes',         label: 'Dataflow Changes',             tier: 'hourly',  desc: 'Fetch all changes linked to each dataflow — upserts Change nodes and creates HAS_CHANGE relationships',                                                       endpoint: 'GET /PluginDataflowsDataflow/{id}/Change {all dataflows}' },
+  { id: 'dataflow_associated_apps', label: 'Dataflow Associated Apps',     tier: 'nightly', desc: 'Fetch software components associated with each dataflow — creates ASSOCIATED_WITH relationships',                                                             endpoint: 'GET /PluginDataflowsDataflow/{id}/PluginArchiswSwcomponent {all dataflows}' },
 ];
 
 const TIER_ORDER = { live: 0, hourly: 1, nightly: 2, weekly: 3 };
@@ -883,6 +886,172 @@ async function runDataflows(ctx) {
   return { count };
 }
 
+// ── DATAFLOW SUB-ITEM HELPERS ─────────────────────────────────────────────────
+
+// Fetch one dataflow's sub-items (Ticket, Change, PluginArchiswSwcomponent) with a 20 s hard timeout.
+// Returns [] on any error or timeout so a single bad dataflow never blocks the batch.
+const fetchDataflowSub = async (baseUrl, dfId, subType, sessionToken, appToken) => {
+  const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
+  const url = `${baseUrl}/apirest.php/PluginDataflowsDataflow/${dfId}/${subType}?range=0-999&expand_dropdowns=true`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    enforceGetOnly('GET');
+    const r = await fetch(url, {
+      method: 'GET',
+      headers: { 'Session-Token': sessionToken, 'App-Token': appToken, 'Content-Type': 'application/json' },
+      agent,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (r.status !== 200 && r.status !== 206) return [];
+    const body = await r.json();
+    return Array.isArray(body) ? body : (body.data || []);
+  } catch {
+    clearTimeout(timer);
+    return [];
+  }
+};
+
+async function runDataflowTickets(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
+  const dataflowIds = dfRes.records.map(r => r.get('id'));
+  const BATCH = 10;
+  let count = 0;
+
+  for (let i = 0; i < dataflowIds.length; i += BATCH) {
+    const batch = dataflowIds.slice(i, i + BATCH);
+
+    // ① Fetch from GLPI in parallel (each with its own 20 s timeout)
+    const fetched = await Promise.all(
+      batch.map(async dfId => ({
+        dfId,
+        tickets: await fetchDataflowSub(baseUrl, dfId, 'Ticket', sessionToken, appToken),
+      }))
+    );
+
+    // ② Write to Neo4j sequentially — shared session cannot run concurrent queries
+    for (const { dfId, tickets } of fetched) {
+      for (const t of tickets) {
+        try {
+          await s.run(
+            `MERGE (tk:Ticket { glpiId: $id })
+             SET tk.name = $name, tk.status = $status, tk.statusLabel = $statusLabel,
+                 tk.date = $date, tk.dateMod = $dateMod, tk.dateSolved = $dateSolved,
+                 tk.priority = $priority, tk.priorityLabel = $priorityLabel,
+                 tk.urgency = $urgency, tk.impact = $impact,
+                 tk.category = $category, tk.entity = $entity,
+                 tk.updatedAt = $now
+             WITH tk
+             MATCH (d:Dataflow { glpiId: $dfId })
+             MERGE (d)-[:HAS_TICKET]->(tk)`,
+            {
+              id: String(t.id), name: t.name || '',
+              status: String(t.status || ''), statusLabel: TICKET_STATUS[t.status] || '',
+              date: t.date || '', dateMod: t.date_mod || '', dateSolved: t.solvedate || '',
+              priority: String(t.priority || ''), priorityLabel: TICKET_PRIORITY[t.priority] || '',
+              urgency: String(t.urgency || ''), impact: String(t.impact || ''),
+              category: String(t.itilcategories_id || ''), entity: String(t.entities_id || ''),
+              now: new Date().toISOString(), dfId: String(dfId),
+            }
+          );
+          count++;
+        } catch {}
+      }
+    }
+  }
+  return { count, dataflowsProcessed: dataflowIds.length };
+}
+
+async function runDataflowChanges(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
+  const dataflowIds = dfRes.records.map(r => r.get('id'));
+  const BATCH = 10;
+  let count = 0;
+
+  for (let i = 0; i < dataflowIds.length; i += BATCH) {
+    const batch = dataflowIds.slice(i, i + BATCH);
+
+    const fetched = await Promise.all(
+      batch.map(async dfId => ({
+        dfId,
+        changes: await fetchDataflowSub(baseUrl, dfId, 'Change', sessionToken, appToken),
+      }))
+    );
+
+    for (const { dfId, changes } of fetched) {
+      for (const c of changes) {
+        try {
+          await s.run(
+            `MERGE (ch:Change { glpiId: $id })
+             SET ch.name = $name, ch.status = $status,
+                 ch.date = $date, ch.dateMod = $dateMod,
+                 ch.urgency = $urgency, ch.impact = $impact, ch.priority = $priority,
+                 ch.category = $category, ch.entity = $entity,
+                 ch.updatedAt = $now
+             WITH ch
+             MATCH (d:Dataflow { glpiId: $dfId })
+             MERGE (d)-[:HAS_CHANGE]->(ch)`,
+            {
+              id: String(c.id), name: c.name || '',
+              status: String(c.status || ''),
+              date: c.date || '', dateMod: c.date_mod || '',
+              urgency: String(c.urgency || ''), impact: String(c.impact || ''),
+              priority: String(c.priority || ''),
+              category: String(c.itilcategories_id || ''), entity: String(c.entities_id || ''),
+              now: new Date().toISOString(), dfId: String(dfId),
+            }
+          );
+          count++;
+        } catch {}
+      }
+    }
+  }
+  return { count, dataflowsProcessed: dataflowIds.length };
+}
+
+async function runDataflowAssociatedApps(ctx) {
+  const { baseUrl, sessionToken, appToken, s } = ctx;
+  const dfRes = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id`);
+  const dataflowIds = dfRes.records.map(r => r.get('id'));
+  const BATCH = 10;
+  let count = 0;
+
+  for (let i = 0; i < dataflowIds.length; i += BATCH) {
+    const batch = dataflowIds.slice(i, i + BATCH);
+
+    const fetched = await Promise.all(
+      batch.map(async dfId => ({
+        dfId,
+        apps: await fetchDataflowSub(baseUrl, dfId, 'PluginArchiswSwcomponent', sessionToken, appToken),
+      }))
+    );
+
+    for (const { dfId, apps } of fetched) {
+      for (const app of apps) {
+        const appName = app.name || String(app.id);
+        try {
+          await s.run(
+            `MERGE (a:Application { name: $name })
+             SET a.glpiId = $id, a.updatedAt = $now
+             WITH a
+             MATCH (d:Dataflow { glpiId: $dfId })
+             MERGE (d)-[:ASSOCIATED_WITH]->(a)`,
+            {
+              name: appName, id: String(app.id),
+              now: new Date().toISOString(), dfId: String(dfId),
+            }
+          );
+          count++;
+        } catch {}
+      }
+    }
+  }
+  return { count, dataflowsProcessed: dataflowIds.length };
+}
+
 // ── KILL SESSION ──────────────────────────────────────────────────────────────
 
 const killSession = async (baseUrl, sessionToken, appToken) => {
@@ -955,9 +1124,30 @@ const RUNNERS = {
   field_change_history:      runFieldChangeHistory,
   app_structures:            runAppStructures,
   dataflows:                 runDataflows,
+  dataflow_tickets:          runDataflowTickets,
+  dataflow_changes:          runDataflowChanges,
+  dataflow_associated_apps:  runDataflowAssociatedApps,
 };
 
 // ── ENDPOINTS ─────────────────────────────────────────────────────────────────
+
+// ── ABORT FLAG ────────────────────────────────────────────────────────────────
+let abortRequested = false;
+
+// POST /api/pipeline/abort — request a running pipeline to stop after its current stage
+router.post('/abort', async (req, res) => {
+  abortRequested = true;
+  // Also mark any "running" stage as aborted in Neo4j so the UI reflects it immediately
+  const s = driver.session();
+  try {
+    await s.run(
+      `MATCH (m:PipelineMeta { status: 'running' })
+       SET m.status = 'error', m.errorMessage = 'Aborted by user', m.lastRunEnd = $now`,
+      { now: new Date().toISOString() }
+    );
+  } catch {} finally { await s.close(); }
+  res.json({ success: true, message: 'Abort requested — pipeline stops after current stage' });
+});
 
 // GET /api/pipeline/stages — list all stage definitions
 router.get('/stages', (req, res) => res.json({ stages: STAGES }));
@@ -1037,9 +1227,21 @@ router.get('/stats', async (req, res) => {
 
 // POST /api/pipeline/run — execute the pipeline
 // Body: { glpiUrl, userToken, appToken, tier?, force?, stages? }
+// Credentials are optional if PipelineConfig is stored in Neo4j.
 router.post('/run', async (req, res) => {
-  const { glpiUrl, userToken, appToken, tier = 'live', force = false, stages: stageOverride } = req.body;
-  if (!glpiUrl || !userToken || !appToken) return res.status(400).json({ error: 'glpiUrl, userToken and appToken are required' });
+  let { glpiUrl, userToken, appToken, tier = 'live', force = false, stages: stageOverride } = req.body;
+  if (!glpiUrl || !userToken || !appToken) {
+    // fall back to stored config
+    const { getConfig } = require('../lib/scheduler');
+    const cfg = await getConfig();
+    if (!cfg || !cfg.glpiUrl || !cfg.glpiUserToken || !cfg.glpiAppToken)
+      return res.status(400).json({ error: 'glpiUrl, userToken and appToken are required' });
+    glpiUrl   = glpiUrl   || cfg.glpiUrl;
+    userToken = userToken || cfg.glpiUserToken;
+    appToken  = appToken  || cfg.glpiAppToken;
+  }
+
+  abortRequested = false; // clear any previous abort request
 
   const s = driver.session();
   const startedAt = new Date().toISOString();
@@ -1102,6 +1304,10 @@ router.post('/run', async (req, res) => {
 
   try {
     for (const stageDef of targetStages) {
+      if (abortRequested) {
+        errors[stageDef.id] = 'Aborted by user';
+        break;
+      }
       await runStage(stageDef);
     }
 

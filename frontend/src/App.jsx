@@ -2259,6 +2259,7 @@ const GLPISync = ({ api }) => {
   const [status, setStatus]     = useState(null);
   const [running, setRunning]   = useState(false);
   const [activeRun, setActiveRun] = useState(null);
+  const [killing, setKilling]   = useState(false);
   const [force, setForce]       = useState(false);
   const [runError, setRunError] = useState(null);
   const [schedule, setSchedule]   = useState({ liveInterval: "5", nightlyTime: "02:00", enabled: true });
@@ -2303,6 +2304,15 @@ const GLPISync = ({ api }) => {
     await loadStatus();
     setRunning(false);
     setActiveRun(null);
+  };
+
+  const killSync = async () => {
+    setKilling(true);
+    try { await api.post("/api/pipeline/abort", {}); } catch {}
+    await loadStatus();
+    setRunning(false);
+    setActiveRun(null);
+    setKilling(false);
   };
 
   const saveSchedule = async () => {
@@ -2422,7 +2432,12 @@ const GLPISync = ({ api }) => {
             <span style={{ fontSize: 11, color: T.textMuted }}>Stages</span>
             <span style={{ fontSize: 12, fontWeight: 700, color: T.text }}>{doneCount}/{stages.length || 24}</span>
           </div>
-          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            {(running || runningCount > 0) && (
+              <Btn size="sm" color={T.danger} onClick={killSync} disabled={killing}>
+                {killing ? "Stopping…" : "Kill All Syncs"}
+              </Btn>
+            )}
             {[["live", T.success], ["hourly", T.warning], ["nightly", T.purple]].map(([tier, col]) => (
               <Btn key={tier} size="sm" color={col} onClick={() => runPipeline(tier)} disabled={running || !isConfigured}>
                 {running && activeRun === tier ? "Running…" : `Run ${tier.charAt(0).toUpperCase() + tier.slice(1)}`}
