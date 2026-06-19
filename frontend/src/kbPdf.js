@@ -5,16 +5,16 @@ const PW = 210, PH = 297;
 const ML = 19, MR = 16, MT = 20, MB = 14;
 const CW = PW - ML - MR;
 // OMDS brand palette
-const NAVY      = [10,  14,  26];   // #0A0E1A  – main dark bg
-const NAVY_CARD = [17,  29,  53];   // #111D35  – card / table header bg
-const ACCENT    = [59,  130, 246];  // #3B82F6  – primary blue accent
-const BORDER    = [28,  43,  74];   // #1C2B4A  – border / rule lines
-const TEXT_LIGHT= [226, 232, 244];  // #E2E8F4  – light text on dark bg
+const NAVY      = [10,  14,  26];   // #0A0E1A  - main dark bg
+const NAVY_CARD = [17,  29,  53];   // #111D35  - card / table header bg
+const ACCENT    = [59,  130, 246];  // #3B82F6  - primary blue accent
+const BORDER    = [28,  43,  74];   // #1C2B4A  - border / rule lines
+const TEXT_LIGHT= [226, 232, 244];  // #E2E8F4  - light text on dark bg
 const ROW_ALT   = [240, 245, 255];  // light blue tint for alternating rows
 const GRAY      = [148, 163, 184];  // blue-gray for subtle lines / footer text
 const FOOT_H    = MB + 10;
 
-// ── HEADER / FOOTER ──────────────────────────────────────────────────────────
+// HEADER / FOOTER -----------------------------------------------
 
 function drawFirstPageHeader(doc, title, updatedAt, glpiId) {
   const hY = 7;
@@ -30,7 +30,7 @@ function drawFirstPageHeader(doc, title, updatedAt, glpiId) {
 
   const leftW = tw * 0.48, labelW = tw * 0.32, valW = tw - leftW - labelW;
   const rows = [
-    { label: 'Reference:', value: glpiId ? `#${glpiId}` : '—' },
+    { label: 'Reference:', value: glpiId ? '#' + glpiId : '-' },
     { label: 'Effective Date:', value: updatedAt || '' },
     { label: 'Page:', value: '1 / 1' },
   ];
@@ -79,10 +79,14 @@ function drawFooter(doc, pageNum, totalPages) {
   doc.setDrawColor(...ACCENT); doc.setLineWidth(0.2);
   doc.line(startX, fy + 0.6, startX + ruEnd, fy + 0.6);
   doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...ACCENT);
-  doc.text(`${pageNum} / ${totalPages}`, PW - MR, fy + 5, { align: 'right' });
+  doc.text(pageNum + ' / ' + totalPages, PW - MR, fy + 5, { align: 'right' });
 }
 
-// ── INLINE MARKDOWN CLEANER (does NOT collapse newlines) ─────────────────────
+// INLINE MARKDOWN CLEANER (does NOT collapse newlines) ----------
+
+// Keep only Basic Latin through Latin Extended-B (U+0000-U+024F)
+// — jsPDF Helvetica is Latin-only; strip emojis/icons/CJK/etc.
+var NON_LATIN_RE = /[^\u0000-\u024F]/g;
 
 function stripInline(text) {
   return (text || '')
@@ -94,44 +98,45 @@ function stripInline(text) {
     .replace(/\*(.+?)\*/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    // strip non-Latin Unicode (emojis, icons, symbols) — jsPDF Helvetica is Latin-only
-    .replace(/[^\x00-\x024F]/g, '')
+    .replace(NON_LATIN_RE, '')
     .replace(/ +/g, ' ')
     .trim();
 }
 
 // Split raw markdown line into plain/link segments (preserves urls)
 function parseSegments(line) {
-  const segments = [];
-  const linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
-  let last = 0, m;
-  const clean = s => s
-    .replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
-    .replace(/&[a-z#0-9]+;/gi, ' ').replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/\*(.+?)\*/g, '$1').replace(/`([^`]+)`/g, '$1')
-    .replace(/[^\x00-\x024F]/g, '').replace(/ +/g, ' ').trim();
+  var segments = [];
+  var linkRe = /\[([^\]]+)\]\(([^)]+)\)/g;
+  var last = 0, m;
+  var clean = function(s) {
+    return s
+      .replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+      .replace(/&[a-z#0-9]+;/gi, ' ').replace(/\*\*(.+?)\*\*/g, '$1')
+      .replace(/\*(.+?)\*/g, '$1').replace(/`([^`]+)`/g, '$1')
+      .replace(NON_LATIN_RE, '').replace(/ +/g, ' ').trim();
+  };
   while ((m = linkRe.exec(line)) !== null) {
     if (m.index > last) segments.push({ type: 'text', text: clean(line.slice(last, m.index)) });
     segments.push({ type: 'link', text: clean(m[1]), url: m[2].trim() });
     last = m.index + m[0].length;
   }
   if (last < line.length) segments.push({ type: 'text', text: clean(line.slice(last)) });
-  return segments.filter(s => s.text);
+  return segments.filter(function(s) { return s.text; });
 }
 
 function parseTableRow(line) {
-  return line.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => stripInline(c.trim()));
+  return line.replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(c) { return stripInline(c.trim()); });
 }
 
 function isSepRow(line) {
   return /^\|[\s\-:|]+\|/.test(line);
 }
 
-// ── CONTENT RENDERER ─────────────────────────────────────────────────────────
+// CONTENT RENDERER ----------------------------------------------
 
 function renderContent(doc, content, startY, title) {
-  let y = startY;
+  var y = startY;
 
   function newPage() {
     doc.addPage();
@@ -143,21 +148,21 @@ function renderContent(doc, content, startY, title) {
   }
 
   function renderTable(tableLines) {
-    const headerCells = parseTableRow(tableLines[0]);
-    const dataRows = tableLines
+    var headerCells = parseTableRow(tableLines[0]);
+    var dataRows = tableLines
       .slice(1)
-      .filter(l => !isSepRow(l) && l.trim() !== '')
+      .filter(function(l) { return !isSepRow(l) && l.trim() !== ''; })
       .map(parseTableRow);
 
-    const cols = headerCells.length;
+    var cols = headerCells.length;
     if (cols === 0) return;
 
-    const colW = cols === 2
+    var colW = cols === 2
       ? [CW * 0.38, CW * 0.62]
       : Array(cols).fill(CW / cols);
 
-    const PAD = 2.5;
-    const HDR_H = 7;
+    var PAD = 2.5;
+    var HDR_H = 7;
 
     checkPage(HDR_H + 8);
     doc.setFillColor(...NAVY_CARD);
@@ -166,30 +171,31 @@ function renderContent(doc, content, startY, title) {
     doc.setFontSize(8);
     doc.setDrawColor(...BORDER);
     doc.setLineWidth(0.25);
-    let x = ML;
-    headerCells.forEach((cell, ci) => {
+    var x = ML;
+    headerCells.forEach(function(cell, ci) {
       if (ci < colW.length) {
         doc.rect(x, y, colW[ci], HDR_H, 'FD');
-        doc.text(doc.splitTextToSize(cell, colW[ci] - PAD * 2)[0] || '', x + PAD, y + 4.8);
+        var cellText = doc.splitTextToSize(cell, colW[ci] - PAD * 2)[0] || '';
+        if (cellText) doc.text(cellText, x + PAD, y + 4.8);
         x += colW[ci];
       }
     });
     y += HDR_H;
 
-    dataRows.forEach((row, ri) => {
+    dataRows.forEach(function(row, ri) {
       doc.setFontSize(8.5);
-      let maxLines = 1;
-      row.forEach((cell, ci) => {
+      var maxLines = 1;
+      row.forEach(function(cell, ci) {
         if (ci < colW.length) {
           maxLines = Math.max(maxLines, doc.splitTextToSize(cell, colW[ci] - PAD * 2).length);
         }
       });
-      const rowH = Math.max(6, maxLines * 4.5 + PAD * 2);
+      var rowH = Math.max(6, maxLines * 4.5 + PAD * 2);
 
       checkPage(rowH + 2);
       doc.setDrawColor(...BORDER); doc.setLineWidth(0.25);
       x = ML;
-      row.forEach((cell, ci) => {
+      row.forEach(function(cell, ci) {
         if (ci >= colW.length) return;
         if (ri % 2 === 0) doc.setFillColor(...ROW_ALT);
         else doc.setFillColor(255, 255, 255);
@@ -200,8 +206,8 @@ function renderContent(doc, content, startY, title) {
           doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
         }
         doc.setTextColor(...NAVY);
-        doc.splitTextToSize(cell, colW[ci] - PAD * 2).forEach((wl, li) => {
-          doc.text(wl, x + PAD, y + PAD + 3.5 + li * 4.5);
+        doc.splitTextToSize(cell, colW[ci] - PAD * 2).forEach(function(wl, li) {
+          if (wl) doc.text(wl, x + PAD, y + PAD + 3.5 + li * 4.5);
         });
         x += colW[ci];
       });
@@ -212,14 +218,16 @@ function renderContent(doc, content, startY, title) {
 
   // Render a raw markdown line with clickable link support
   function renderLineWithLinks(rawLine, startX, fontSize, lineH, maxW) {
-    const segments = parseSegments(rawLine);
-    const hasLinks = segments.some(s => s.type === 'link');
+    var segments = parseSegments(rawLine);
+    var hasLinks = segments.some(function(s) { return s.type === 'link'; });
 
     if (!hasLinks) {
-      // Fast path — plain text with word wrap
-      const plain = segments.map(s => s.text).join(' ');
+      // Fast path - plain text with word wrap
+      var plain = segments.map(function(s) { return s.text; }).join(' ').trim();
+      if (!plain) { y += lineH; return; }
       doc.setFontSize(fontSize); doc.setTextColor(...NAVY);
-      doc.splitTextToSize(plain, maxW).forEach(wl => {
+      doc.splitTextToSize(plain, maxW).forEach(function(wl) {
+        if (!wl) return;
         checkPage(lineH); doc.text(wl, startX, y); y += lineH;
       });
       return;
@@ -227,32 +235,33 @@ function renderContent(doc, content, startY, title) {
 
     // Segment-by-segment rendering with link annotations
     doc.setFont('helvetica', 'normal'); doc.setFontSize(fontSize);
-    let cx = startX;
-    const LINK_H = fontSize * 0.3528 + 1.5; // approx glyph height in mm
+    var cx = startX;
+    var LINK_H = fontSize * 0.3528 + 1.5; // approx glyph height in mm
 
-    for (const seg of segments) {
+    for (var si = 0; si < segments.length; si++) {
+      var seg = segments[si];
       if (!seg.text) continue;
-      const isLink = seg.type === 'link';
+      var isLink = seg.type === 'link';
       doc.setTextColor(...(isLink ? ACCENT : NAVY));
 
-      const words = seg.text.split(/\s+/).filter(Boolean);
-      for (let wi = 0; wi < words.length; wi++) {
-        const prefix = cx > startX ? ' ' : '';
-        const piece  = prefix + words[wi];
-        const pw = doc.getTextWidth(piece);
+      var words = seg.text.split(/\s+/).filter(Boolean);
+      for (var wi = 0; wi < words.length; wi++) {
+        var prefix = cx > startX ? ' ' : '';
+        var piece  = prefix + words[wi];
+        var pw = doc.getTextWidth(piece);
 
         if (cx > startX && cx + pw > startX + maxW) {
           y += lineH; checkPage(lineH); cx = startX;
         }
 
-        const draw = cx === startX ? words[wi] : piece;
-        doc.text(draw, cx, y);
+        var draw = cx === startX ? words[wi] : piece;
+        if (draw) doc.text(draw, cx, y);
 
-        if (isLink && seg.url) {
-          const tw = doc.getTextWidth(draw);
+        if (isLink && seg.url && draw) {
+          var tw = doc.getTextWidth(draw);
           doc.setDrawColor(...ACCENT); doc.setLineWidth(0.15);
           doc.line(cx, y + 0.8, cx + tw, y + 0.8);
-          doc.link(cx, y - LINK_H + 1, tw, LINK_H, { url: seg.url });
+          try { doc.link(cx, y - LINK_H + 1, tw, LINK_H, { url: seg.url }); } catch (e) {}
         }
 
         cx += doc.getTextWidth(draw);
@@ -262,13 +271,13 @@ function renderContent(doc, content, startY, title) {
     y += lineH;
   }
 
-  // Walk lines one by one — never collapse across newlines
-  const lines = content.split('\n');
-  let i = 0;
-  const LH = 5;
+  // Walk lines one by one - never collapse across newlines
+  var lines = content.split('\n');
+  var i = 0;
+  var LH = 5;
 
   while (i < lines.length) {
-    const line = lines[i];
+    var line = lines[i];
 
     // H2
     if (/^## /.test(line)) {
@@ -311,9 +320,9 @@ function renderContent(doc, content, startY, title) {
       y += 5; i++; continue;
     }
 
-    // Table block — collect all consecutive table lines
+    // Table block - collect all consecutive table lines
     if (/^\|/.test(line)) {
-      const tableLines = [];
+      var tableLines = [];
       while (i < lines.length && /^\|/.test(lines[i])) {
         tableLines.push(lines[i]);
         i++;
@@ -324,7 +333,7 @@ function renderContent(doc, content, startY, title) {
 
     // Code block
     if (/^```/.test(line)) {
-      const codeLines = [];
+      var codeLines = [];
       i++;
       while (i < lines.length && !/^```/.test(lines[i])) {
         codeLines.push(lines[i]);
@@ -332,12 +341,12 @@ function renderContent(doc, content, startY, title) {
       }
       i++;
       if (codeLines.length) {
-        const bH = codeLines.length * 4.5 + 6;
+        var bH = codeLines.length * 4.5 + 6;
         checkPage(bH + 4);
         doc.setFillColor(...ROW_ALT); doc.setDrawColor(...BORDER); doc.setLineWidth(0.2);
         doc.rect(ML, y - 1, CW, bH, 'FD');
         doc.setFont('courier', 'normal'); doc.setFontSize(8); doc.setTextColor(40, 40, 40);
-        codeLines.forEach(cl => { doc.text(cl.substring(0, 100), ML + 2, y + 3); y += 4.5; });
+        codeLines.forEach(function(cl) { if (cl) doc.text(cl.substring(0, 100), ML + 2, y + 3); y += 4.5; });
         doc.setFont('helvetica', 'normal'); doc.setTextColor(0, 0, 0);
         y += 4;
       }
@@ -350,12 +359,12 @@ function renderContent(doc, content, startY, title) {
     }
 
     // List item
-    const listMatch = line.match(/^(\s*)([-*+]|\d+\.) (.+)/);
+    var listMatch = line.match(/^(\s*)([-*+]|\d+\.) (.+)/);
     if (listMatch) {
-      const indX = ML + Math.min(listMatch[1].length, 4) * 2;
+      var indX = ML + Math.min(listMatch[1].length, 4) * 2;
       doc.setFont('helvetica', 'normal');
       checkPage(LH);
-      renderLineWithLinks('• ' + listMatch[3], indX, 10, LH, CW - (indX - ML));
+      renderLineWithLinks('- ' + listMatch[3], indX, 10, LH, CW - (indX - ML));
       i++; continue;
     }
 
@@ -371,22 +380,22 @@ function renderContent(doc, content, startY, title) {
   return y;
 }
 
-// ── MAIN EXPORT ──────────────────────────────────────────────────────────────
+// MAIN EXPORT ---------------------------------------------------
 
 export function generateKnowledgePDF(entry) {
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  var doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-  const title     = entry.topic    || 'Knowledge Entry';
-  const category  = (entry.category || '').toUpperCase();
-  const source    = entry.source   || '';
-  const tags      = (entry.tags    || []).join(' · ');
-  const updatedAt = (entry.updatedAt || entry.glpiSyncedAt || '').substring(0, 10);
-  const glpiId    = entry.glpiId   || entry.dataflowId || '';
-  const content   = entry.content  || '';
+  var title     = entry.topic    || 'Knowledge Entry';
+  var category  = (entry.category || '').toUpperCase();
+  var source    = entry.source   || '';
+  var tags      = (entry.tags    || []).join(' - ');
+  var updatedAt = (entry.updatedAt || entry.glpiSyncedAt || '').substring(0, 10);
+  var glpiId    = entry.glpiId   || entry.dataflowId || '';
+  var content   = entry.content  || '';
 
-  let y = drawFirstPageHeader(doc, title, updatedAt, glpiId);
+  var y = drawFirstPageHeader(doc, title, updatedAt, glpiId);
 
-  const meta = [category, source, glpiId ? `GLPI #${glpiId}` : '', tags].filter(Boolean).join('  ·  ');
+  var meta = [category, source, glpiId ? 'GLPI #' + glpiId : '', tags].filter(Boolean).join('  -  ');
   if (meta) {
     doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...GRAY);
     doc.text(meta, ML, y);
@@ -394,13 +403,13 @@ export function generateKnowledgePDF(entry) {
   }
 
   doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(...NAVY);
-  const titleLines = doc.splitTextToSize(title, CW);
+  var titleLines = doc.splitTextToSize(title, CW);
   doc.text(titleLines, ML, y);
   y += titleLines.length * 7 + 2;
 
   if (updatedAt) {
     doc.setFont('helvetica', 'italic'); doc.setFontSize(9); doc.setTextColor(...GRAY);
-    doc.text(`Last updated: ${updatedAt}`, ML, y);
+    doc.text('Last updated: ' + updatedAt, ML, y);
     y += 5;
   }
 
@@ -408,14 +417,20 @@ export function generateKnowledgePDF(entry) {
   doc.line(ML, y, ML + CW, y);
   y += 6;
 
-  renderContent(doc, content, y, title);
+  try {
+    renderContent(doc, content, y, title);
+  } catch (e) {
+    console.error('PDF render error:', e);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(180, 0, 0);
+    doc.text('Error rendering content. Please check the browser console.', ML, y + 10);
+  }
 
-  const total = doc.getNumberOfPages();
-  for (let p = 1; p <= total; p++) {
+  var total = doc.getNumberOfPages();
+  for (var p = 1; p <= total; p++) {
     doc.setPage(p);
     drawFooter(doc, p, total);
   }
 
-  const filename = `ARIA_KB_${title.replace(/[^a-z0-9]/gi, '_').substring(0, 50)}.pdf`;
+  var filename = 'ARIA_KB_' + title.replace(/[^a-z0-9]/gi, '_').substring(0, 50) + '.pdf';
   doc.save(filename);
 }
