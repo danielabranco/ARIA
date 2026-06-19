@@ -1475,7 +1475,7 @@ const ArchitectureMap = ({ api }) => {
       if (!rawLabel) continue; // skip dataflows with no label after stripping
       if (activeDfSet && !activeDfSet.has(rawLabel)) continue; // df name filter
       if (activeDfStatus && !activeDfStatus.has(df.properties?.status || '')) continue; // df status filter
-      if (activeAppStatus && (!activeAppStatus.has(src.properties?.status || '') || !activeAppStatus.has(dst.properties?.status || ''))) continue; // app status filter
+      if (activeAppStatus && !activeAppStatus.has(src.properties?.status || '') && !activeAppStatus.has(dst.properties?.status || '')) continue; // app status filter — OR: show if either end matches
       const key = `${src.id}→${dst.id}`;
       if (!allDfGroups[key]) allDfGroups[key] = { src, dst, names: [], dfIds: [] };
       allDfGroups[key].names.push({ label: rawLabel, isHighlit: sq && rawLabel.toLowerCase().includes(sq) });
@@ -1517,11 +1517,16 @@ const ArchitectureMap = ({ api }) => {
     const visAppIds = new Set();
     for (const { src, dst } of Object.values(dfGroups)) { visAppIds.add(src.id); visAppIds.add(dst.id); }
 
+    // Apps that directly match the status filter — ensures isolated nodes (no dataflows) still appear
+    const statusMatchedIds = activeAppStatus
+      ? new Set(nodes.filter(n => n.label === 'Application' && activeAppStatus.has(n.properties?.status || '')).map(n => n.id))
+      : null;
+
     // ── Draw: Simple view ───────────────────────────────────
     let drawNodes;
     if (isSimple) {
       drawNodes = hasAnyFilter
-        ? nodes.filter(n => n.label === 'Application' && visAppIds.has(n.id))
+        ? nodes.filter(n => n.label === 'Application' && (visAppIds.has(n.id) || (statusMatchedIds && statusMatchedIds.has(n.id))))
         : nodes.filter(n => n.label === 'Application');
       const simpleVisMap = {};
       drawNodes.forEach(n => { simpleVisMap[n.id] = n; });
@@ -1564,7 +1569,7 @@ const ArchitectureMap = ({ api }) => {
       const visDfIds = new Set();
       if (hasAnyFilter) {
         for (const { dfIds } of Object.values(dfGroups)) dfIds.forEach(id => visDfIds.add(id));
-        drawNodes = nodes.filter(n => visAppIds.has(n.id) || visDfIds.has(n.id));
+        drawNodes = nodes.filter(n => visAppIds.has(n.id) || visDfIds.has(n.id) || (statusMatchedIds && n.label === 'Application' && statusMatchedIds.has(n.id)));
       } else {
         drawNodes = nodes;
       }
