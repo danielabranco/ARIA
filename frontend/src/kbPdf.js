@@ -93,6 +93,8 @@ function stripInline(text) {
     .replace(/<[^>]+>/g, '')
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, function(m, n) { return String.fromCharCode(+n); })
+    .replace(/&#x([0-9a-f]+);/gi, function(m, h) { return String.fromCharCode(parseInt(h, 16)); })
     .replace(/&[a-z#0-9]+;/gi, ' ')
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/\*(.+?)\*/g, '$1')
@@ -112,6 +114,8 @@ function parseSegments(line) {
     return s
       .replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+      .replace(/&#(\d+);/g, function(m, n) { return String.fromCharCode(+n); })
+      .replace(/&#x([0-9a-f]+);/gi, function(m, h) { return String.fromCharCode(parseInt(h, 16)); })
       .replace(/&[a-z#0-9]+;/gi, ' ').replace(/\*\*(.+?)\*\*/g, '$1')
       .replace(/\*(.+?)\*/g, '$1').replace(/`([^`]+)`/g, '$1')
       .replace(NON_LATIN_RE, '').replace(/ +/g, ' ').trim();
