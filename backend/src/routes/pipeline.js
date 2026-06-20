@@ -1140,6 +1140,10 @@ async function runDataflows(ctx) {
     const dst          = resolveApp(item.plugin_dataflows_toswcomponents_id);
     const now          = new Date().toISOString();
     const dfGdpr       = resolveLookup('holiday_action', item.plugin_dataflows_holidayactions_id, ctx);
+    const dfLongDesc   = item.content || '';
+    const _leafName    = raw => raw.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n))).replace(/&gt;/g, '>').replace(/&amp;/g, '&').split('>').pop().trim();
+    const dfGroup        = _leafName(String(item.groups_id || ''));
+    const dfSupportGroup = _leafName(String(item.plugin_dataflows_supportgroups_id || ''));
 
     const _nameOk     = /\[.+?\].*\[.+?\]/.test(dfName);
     const _gdprOk     = !!(dfGdpr && dfGdpr.trim());
@@ -1193,12 +1197,13 @@ async function runDataflows(ctx) {
         '### General',
         '| Field | Value |',
         '|---|---|',
-        row('GLPI ID',        dfId),
-        row('Name',           dfName),
-        row('Status',         dfStatusRaw),
-        row('Flow Group',     dfFlowGroup),
-        row('GDPR Level',     dfGdpr),
-        row('Indicator',      dfIndicator),
+        row('GLPI ID',           dfId),
+        row('Name',              dfName),
+        row('Status',            dfStatusRaw),
+        row('Flow Group',        dfFlowGroup),
+        row('GDPR Level',        dfGdpr),
+        row('Indicator',         dfIndicator),
+        row('Long Description',  dfLongDesc),
         dateMod ? `| Last Modified | ${dateMod} |` : '',
         `| Last Synced | ${now.split('T')[0]} |`,
         '',
@@ -1222,14 +1227,14 @@ async function runDataflows(ctx) {
         row('Trigger',          String(item.plugin_dataflows_triggertypes_id       || '')),
         row('Frequency',        String(item.plugin_dataflows_transferfreqs_id      || '')),
         row('Error Handling',   String(item.plugin_dataflows_errorhandlings_id     || '')),
-        row('Source Connector', String(item.plugin_dataflows_sourceconnectors_id   || '')),
+        row('Priority',         String(item.plugin_dataflows_sourceconnectors_id   || '')),
         '',
         '### Ownership',
         '| Field | Value |',
         '|---|---|',
         row('Owner',         String(item.users_id  || '')),
-        row('Group',         String(item.groups_id || '')),
-        row('Support Group', String(item.plugin_dataflows_supportgroups_id || '')),
+        row('Group',         dfGroup),
+        row('Support Group', dfSupportGroup),
         '',
         '### Documentation',
         '| Field | Value |',
@@ -1260,15 +1265,16 @@ async function runDataflows(ctx) {
              id: $id, topic: $topic, content: $content,
              category: 'dataflow', source: 'glpi-sync',
              glpiId: $glpiId, compliant: $compliant,
+             dfStatus: $dfStatus, dfGdpr: $dfGdpr,
              tags: ['dataflow','glpi'], createdAt: $now
            })`,
-          { id: uuid(), topic: dfTopic, content: dfContent, glpiId: dfId, compliant: dfCompliant, now }
+          { id: uuid(), topic: dfTopic, content: dfContent, glpiId: dfId, compliant: dfCompliant, dfStatus: dfStatusRaw, dfGdpr: dfGdpr, now }
         );
       } else {
         for (const rec of kRes.records) {
           await s.run(
-            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.compliant = $compliant, k.reviewStatus = null, k.glpiSyncedAt = $now`,
-            { id: rec.get('id'), topic: dfTopic, content: dfContent, compliant: dfCompliant, now }
+            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.compliant = $compliant, k.dfStatus = $dfStatus, k.dfGdpr = $dfGdpr, k.reviewStatus = null, k.glpiSyncedAt = $now`,
+            { id: rec.get('id'), topic: dfTopic, content: dfContent, compliant: dfCompliant, dfStatus: dfStatusRaw, dfGdpr: dfGdpr, now }
           );
         }
       }
@@ -1482,16 +1488,17 @@ async function runDataflowAssociatedItems(ctx) {
 
 async function runDataflowCompliance(ctx) {
   const { s } = ctx;
-  const res = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id, d.name AS name, d.dataClassification AS gdpr, d.status AS status, d.sourceApp AS src, d.destApp AS dst, d.protocol AS proto`);
+  const res = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id, d.name AS name, d.dataClassification AS gdpr, d.status AS status, d.sourceApp AS src, d.destApp AS dst, d.protocol AS proto, d.status AS dfStatus`);
   let total = 0, compliantCount = 0;
 
   for (const rec of res.records) {
-    const id    = rec.get('id');
-    const name  = rec.get('name') || '';
-    const gdpr  = rec.get('gdpr') || '';
-    const src   = rec.get('src')  || '';
-    const dst   = rec.get('dst')  || '';
-    const proto = rec.get('proto') || '';
+    const id      = rec.get('id');
+    const name    = rec.get('name') || '';
+    const gdpr    = rec.get('gdpr') || '';
+    const src     = rec.get('src')  || '';
+    const dst     = rec.get('dst')  || '';
+    const proto   = rec.get('proto') || '';
+    const dfStatus = rec.get('dfStatus') || '';
 
     const nameOk  = /\[.+?\].*\[.+?\]/.test(name);
     const gdprOk  = !!(gdpr && gdpr.trim());
@@ -1505,6 +1512,16 @@ async function runDataflowCompliance(ctx) {
       `MERGE (d:Dataflow { glpiId: $id }) SET d.compliant = $compliant`,
       { id, compliant }
     );
+
+    const cntRes = await s.run(
+      `MATCH (d:Dataflow { glpiId: $id })
+       OPTIONAL MATCH (d)-[:HAS_TICKET]->(t:Ticket)
+       OPTIONAL MATCH (d)-[:HAS_CHANGE]->(c:Change)
+       RETURN count(DISTINCT t) AS tc, count(DISTINCT c) AS cc`,
+      { id }
+    );
+    const ticketCount = cntRes.records[0]?.get('tc').toNumber() || 0;
+    const changeCount = cntRes.records[0]?.get('cc').toNumber() || 0;
 
     const section = [
       '',
@@ -1532,8 +1549,8 @@ async function runDataflowCompliance(ctx) {
       if (compIdx !== -1) content = content.substring(0, compIdx);
       content = content + section;
       await s.run(
-        `MATCH (k:Knowledge) WHERE k.id = $kid SET k.content = $content, k.reviewStatus = null, k.compliant = $compliant`,
-        { kid, content, compliant }
+        `MATCH (k:Knowledge) WHERE k.id = $kid SET k.content = $content, k.reviewStatus = null, k.compliant = $compliant, k.dfStatus = $dfStatus, k.dfGdpr = $dfGdpr, k.ticketCount = $tc, k.changeCount = $cc`,
+        { kid, content, compliant, dfStatus, dfGdpr: gdpr, tc: ticketCount, cc: changeCount }
       );
     }
 

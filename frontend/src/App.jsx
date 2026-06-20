@@ -833,9 +833,35 @@ const KnowledgeBase = ({ api }) => {
                           </a>
                         )}
                       </div>
-                      <div style={{ fontSize: 12, color: T.textMuted, lineHeight: 1.6 }}>
-                        {(entry.content || "").substring(0, 200)}{entry.content?.length > 200 ? "..." : ""}
-                      </div>
+                      {entry.category === "dataflow" ? (() => {
+                        const st = (entry.dfStatus || '').toUpperCase();
+                        const stColor = st.includes('ACTIV') ? T.success : st.includes('DEVEL') ? T.warning : st.includes('REMOV') || st.includes('STOP') ? T.danger : T.textDim;
+                        const gdpr = entry.dfGdpr || '';
+                        const gdprColor = gdpr.includes('🔴') ? '#ef4444' : gdpr.includes('🟡') ? '#f59e0b' : gdpr.includes('🟢') ? T.success : T.textDim;
+                        const tc = entry.ticketCount ?? '—';
+                        const cc = entry.changeCount ?? '—';
+                        return (
+                          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 5 }}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                              {st && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: `${stColor}18`, color: stColor, border: `1px solid ${stColor}40` }}>{st}</span>}
+                              {gdpr && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: `${gdprColor}15`, color: gdprColor, border: `1px solid ${gdprColor}35`, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={gdpr}>{gdpr}</span>}
+                            </div>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                              <span style={{ fontSize: 10, color: T.textMuted, display: "flex", alignItems: "center", gap: 3 }}>
+                                <span style={{ fontSize: 11 }}>🎫</span> <strong style={{ color: T.text }}>{tc}</strong> ticket{tc !== 1 ? 's' : ''}
+                              </span>
+                              <span style={{ color: T.border }}>·</span>
+                              <span style={{ fontSize: 10, color: T.textMuted, display: "flex", alignItems: "center", gap: 3 }}>
+                                <span style={{ fontSize: 11 }}>🔄</span> <strong style={{ color: T.text }}>{cc}</strong> change{cc !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })() : (
+                        <div style={{ fontSize: 12, color: T.textMuted, lineHeight: 1.6 }}>
+                          {(entry.content || "").substring(0, 200)}{entry.content?.length > 200 ? "..." : ""}
+                        </div>
+                      )}
                       {entry.tags?.length > 0 && (
                         <div style={{ marginTop: 8, display: "flex", gap: 5, flexWrap: "wrap" }}>
                           {entry.tags.map(t => (
