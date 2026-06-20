@@ -38,6 +38,7 @@ const STAGES = [
   { id: 'dataflows',                 label: 'Dataflows',                    tier: 'nightly', desc: 'Fetch dataflows — upserts Dataflow nodes, resolves src/dst apps, builds FEEDS_INTO / CONNECTS_TO relationships and Knowledge entries',                         endpoint: 'GET /PluginDataflowsDataflow {expand_dropdowns, is_deleted=0}' },
   { id: 'dataflow_itsm_links',       label: 'Dataflow ITSM Links',          tier: 'hourly',  desc: 'Fetch all tickets, changes, problems and projects linked to dataflows via GLPI junction tables — creates HAS_TICKET, HAS_CHANGE, HAS_PROBLEM, HAS_PROJECT relationships',  endpoint: 'GET /Item_Ticket + Change_Item + Item_Problem + Item_Project {searchText[itemtype]=PluginDataflowsDataflow, all at once}' },
   { id: 'stub_enrichment',           label: 'Stub Enrichment',              tier: 'hourly',  desc: 'Individually fetch any Ticket/Change/Problem nodes linked to dataflows or applications that have no name — fills gaps left by deleted or access-restricted items', endpoint: 'GET /Ticket/{id} + Change/{id} + Problem/{id} {stubs only}' },
+  { id: 'dataflow_compliance',       label: 'Dataflow Compliance',          tier: 'nightly', desc: 'Evaluate each Dataflow against IT.WI.019/R03 mandatory fields (name format, GDPR label, from/to app, protocol) — sets compliant property on Dataflow nodes and adds a Compliance section to each Knowledge entry', endpoint: 'Neo4j only (no GLPI calls)' },
   { id: 'app_itsm_links',            label: 'App ITSM Links',               tier: 'hourly',  desc: 'Fetch all tickets and changes linked to application structures via GLPI junction tables — creates HAS_TICKET, HAS_CHANGE relationships on Application nodes',   endpoint: 'GET /Item_Ticket + Change_Item {searchText[itemtype]=PluginArchiswSwcomponent, all at once}' },
   { id: 'dataflow_associated_items', label: 'Dataflow Associated Items',   tier: 'nightly', desc: 'Fetch items associated with each dataflow from PluginDataflowsDataflow_Item (apps, etc.) — groups client-side, creates ASSOCIATED_WITH relationships',         endpoint: 'GET /PluginDataflowsDataflow_Item {all at once, grouped client-side}' },
   { id: 'app_associated_items',      label: 'App Associated Items',         tier: 'nightly', desc: 'Fetch items associated with each application from PluginArchiswSwcomponent_Item — groups client-side, creates ASSOCIATED_WITH relationships',                  endpoint: 'GET /PluginArchiswSwcomponent_Item {all at once, grouped client-side}' },
@@ -1138,6 +1139,14 @@ async function runDataflows(ctx) {
     const src          = resolveApp(item.plugin_dataflows_fromswcomponents_id);
     const dst          = resolveApp(item.plugin_dataflows_toswcomponents_id);
     const now          = new Date().toISOString();
+    const dfGdpr       = resolveLookup('holiday_action', item.plugin_dataflows_holidayactions_id, ctx);
+
+    const _nameOk     = /\[.+?\].*\[.+?\]/.test(dfName);
+    const _gdprOk     = !!(dfGdpr && dfGdpr.trim());
+    const _appsOk     = !!(src && dst);
+    const _protOk     = !!(dfProtocol && dfProtocol.trim());
+    const _cIssues    = [...(_nameOk ? [] : ['name format']), ...(_gdprOk ? [] : ['GDPR label']), ...(_appsOk ? [] : ['from/to application']), ...(_protOk ? [] : ['protocol'])];
+    const dfCompliant = _cIssues.length === 0;
 
     await s.run(
       `MERGE (d:Dataflow { glpiId: $id })
@@ -1148,6 +1157,7 @@ async function runDataflows(ctx) {
            d.owner = $owner, d.group = $grp,
            d.indicator = $indicator, d.mappingDoc = $mDoc,
            d.technicalDoc = $tDoc, d.description = $desc,
+           d.dataClassification = $gdpr, d.compliant = $compliant,
            d.updatedAt = $now`,
       {
         id: dfId, name: dfName, status: dfStatusRaw,
@@ -1157,14 +1167,13 @@ async function runDataflows(ctx) {
         src, dst, owner: String(item.users_id || ''), grp: String(item.groups_id || ''),
         indicator: String(item.plugin_dataflows_indicators_id || ''),
         mDoc: item.mappingdocurl || '', tDoc: item.technicaldocurl || '',
-        desc: dfDesc, now,
+        desc: dfDesc, gdpr: dfGdpr, compliant: dfCompliant, now,
       }
     );
 
     // Knowledge upsert — full markdown table format
     try {
       const dfTopic   = `Dataflow #${dfId} — ${dfName}`;
-      const dfGdpr    = resolveLookup('holiday_action', item.plugin_dataflows_holidayactions_id, ctx);
       const dfIndicator = String(item.plugin_dataflows_indicators_id || '');
       const srcGlpiId = src ? appNameToId.get(src) : null;
       const dstGlpiId = dst ? appNameToId.get(dst) : null;
@@ -1227,6 +1236,18 @@ async function runDataflows(ctx) {
         '|---|---|',
         row('Mapping Doc',   item.mappingdocurl  || ''),
         row('Technical Doc', item.technicaldocurl || ''),
+        '',
+        '### Compliance',
+        '| Field | Status |',
+        '|---|---|',
+        `| Name format [SOURCE]-[DEST] | ${_nameOk ? '✅' : '❌'} |`,
+        `| GDPR Label | ${_gdprOk ? '✅' : '❌'} |`,
+        `| Status | ✅ |`,
+        `| From/To Application | ${_appsOk ? '✅' : '❌'} |`,
+        `| Protocol | ${_protOk ? '✅' : '❌'} |`,
+        `| Associable to ticket | ⚠️ Not tracked |`,
+        '',
+        dfCompliant ? '**✅ Compliant**' : `**❌ Non-compliant** — missing: ${_cIssues.join(', ')}`,
       ].filter(v => v !== undefined && v !== null).join('\n');
 
       const kRes = await s.run(
@@ -1238,7 +1259,7 @@ async function runDataflows(ctx) {
           `CREATE (k:Knowledge {
              id: $id, topic: $topic, content: $content,
              category: 'dataflow', source: 'glpi-sync',
-             glpiId: $glpiId, reviewStatus: 'to_be_reviewed',
+             glpiId: $glpiId,
              tags: ['dataflow','glpi'], createdAt: $now
            })`,
           { id: uuid(), topic: dfTopic, content: dfContent, glpiId: dfId, now }
@@ -1246,7 +1267,7 @@ async function runDataflows(ctx) {
       } else {
         for (const rec of kRes.records) {
           await s.run(
-            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.glpiSyncedAt = $now`,
+            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.reviewStatus = null, k.glpiSyncedAt = $now`,
             { id: rec.get('id'), topic: dfTopic, content: dfContent, now }
           );
         }
@@ -1459,6 +1480,70 @@ async function runDataflowAssociatedItems(ctx) {
   return { count, totalItems: items.length };
 }
 
+async function runDataflowCompliance(ctx) {
+  const { s } = ctx;
+  const res = await s.run(`MATCH (d:Dataflow) RETURN d.glpiId AS id, d.name AS name, d.dataClassification AS gdpr, d.status AS status, d.sourceApp AS src, d.destApp AS dst, d.protocol AS proto`);
+  let total = 0, compliantCount = 0;
+
+  for (const rec of res.records) {
+    const id    = rec.get('id');
+    const name  = rec.get('name') || '';
+    const gdpr  = rec.get('gdpr') || '';
+    const src   = rec.get('src')  || '';
+    const dst   = rec.get('dst')  || '';
+    const proto = rec.get('proto') || '';
+
+    const nameOk  = /\[.+?\].*\[.+?\]/.test(name);
+    const gdprOk  = !!(gdpr && gdpr.trim());
+    const appsOk  = !!(src && dst);
+    const protOk  = !!(proto && proto.trim());
+    const issues  = [...(nameOk ? [] : ['name format']), ...(gdprOk ? [] : ['GDPR label']), ...(appsOk ? [] : ['from/to application']), ...(protOk ? [] : ['protocol'])];
+    const compliant = issues.length === 0;
+    if (compliant) compliantCount++;
+
+    await s.run(
+      `MERGE (d:Dataflow { glpiId: $id }) SET d.compliant = $compliant`,
+      { id, compliant }
+    );
+
+    const section = [
+      '',
+      '### Compliance',
+      '| Field | Status |',
+      '|---|---|',
+      `| Name format [SOURCE]-[DEST] | ${nameOk ? '✅' : '❌'} |`,
+      `| GDPR Label | ${gdprOk ? '✅' : '❌'} |`,
+      `| Status | ✅ |`,
+      `| From/To Application | ${appsOk ? '✅' : '❌'} |`,
+      `| Protocol | ${protOk ? '✅' : '❌'} |`,
+      `| Associable to ticket | ⚠️ Not tracked |`,
+      '',
+      compliant ? '**✅ Compliant**' : `**❌ Non-compliant** — missing: ${issues.join(', ')}`,
+    ].join('\n');
+
+    const kRes = await s.run(
+      `MATCH (k:Knowledge) WHERE k.category = 'dataflow' AND k.glpiId = $id RETURN k.id AS kid, k.content AS kc`,
+      { id }
+    );
+    for (const kRec of kRes.records) {
+      const kid = kRec.get('kid');
+      let content = kRec.get('kc') || '';
+      const compIdx = content.indexOf('\n### Compliance\n');
+      if (compIdx !== -1) content = content.substring(0, compIdx);
+      content = content + section;
+      await s.run(
+        `MATCH (k:Knowledge) WHERE k.id = $kid SET k.content = $content, k.reviewStatus = null`,
+        { kid, content }
+      );
+    }
+
+    total++;
+  }
+
+  const pct = total > 0 ? Math.round((compliantCount / total) * 100) : 0;
+  return { total, compliant: compliantCount, nonCompliant: total - compliantCount, compliancePercent: pct };
+}
+
 async function runAppITSMLinks(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
 
@@ -1606,6 +1691,7 @@ const RUNNERS = {
   dataflows:                 runDataflows,
   dataflow_itsm_links:       runDataflowITSMLinks,
   stub_enrichment:           runStubEnrichment,
+  dataflow_compliance:       runDataflowCompliance,
   app_itsm_links:            runAppITSMLinks,
   dataflow_associated_items: runDataflowAssociatedItems,
   app_associated_items:      runAppAssociatedItems,
