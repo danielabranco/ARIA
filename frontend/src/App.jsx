@@ -332,11 +332,15 @@ const Dashboard = ({ api, setPage }) => {
   }, []);
 
   const neo4jOk = health?.neo4j === "connected";
+  const compPct  = stats?.compliance?.percent ?? null;
+  const compColor = compPct === null ? T.textDim : compPct >= 80 ? T.success : compPct >= 50 ? T.warning : T.danger;
+  const compGlow  = compPct === null ? T.border : compPct >= 80 ? T.successGlow : compPct >= 50 ? T.warningGlow : T.dangerGlow;
   const statCards = [
     { label: "Knowledge Entries", value: stats?.knowledge || 0, color: T.accent,   glow: T.accentGlow,   icon: "knowledge" },
     { label: "Training Sessions", value: stats?.sessions  || 0, color: T.success,  glow: T.successGlow,  icon: "train"     },
     { label: "Memory Items",      value: stats?.memory    || 0, color: T.warning,  glow: T.warningGlow,  icon: "memory"    },
     { label: "Neo4j Graph",       value: neo4jOk ? "Live" : "Offline", color: neo4jOk ? T.success : T.danger, glow: neo4jOk ? T.successGlow : T.dangerGlow, icon: "link2" },
+    { label: "Dataflow Compliance", value: compPct !== null ? `${compPct}%` : "—", color: compColor, glow: compGlow, icon: "info" },
   ];
 
   const steps = [
@@ -360,7 +364,7 @@ const Dashboard = ({ api, setPage }) => {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14, marginBottom: 24 }}>
         {statCards.map(s => (
           <Card key={s.label} style={{ padding: "20px 22px" }}>
             <div style={{ width: 34, height: 34, borderRadius: 9, background: s.glow, border: `1px solid ${s.color}25`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
@@ -415,12 +419,6 @@ const Dashboard = ({ api, setPage }) => {
 };
 
 // ── KNOWLEDGE BASE ───────────────────────────────────────
-const REVIEW_STATUS = {
-  pending:        { label: "Pending",        color: "#f59e0b" },
-  to_be_reviewed: { label: "To Be Reviewed", color: "#6366f1" },
-  approved:       { label: "Approved",       color: "#10b981" },
-  ignore:         { label: "Ignore",         color: "#6b7280" },
-};
 
 // ── GLPI STATUS / PRIORITY MAPS ─────────────────────────
 const GLPI_STATUS = {
@@ -440,7 +438,7 @@ const GLPI_PRIORITY = {
   6: { label: "Major",     color: "#7f1d1d" },
 };
 
-const KnowledgeDetailPanel = ({ entry, api, onClose, onReviewChange, CAT_COLORS }) => {
+const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
   const [activeTab, setActiveTab] = useState("changes");
   const [glpiData, setGlpiData]   = useState(null);
   const [loadingGlpi, setLoadingGlpi] = useState(false);
@@ -481,9 +479,11 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onReviewChange, CAT_COLORS 
     }
   }, [entry.id]);
 
-  const rs       = entry.reviewStatus || "pending";
-  const rsInfo   = REVIEW_STATUS[rs] || REVIEW_STATUS.pending;
   const catColor = CAT_COLORS[entry.category] || T.accent;
+  const isDataflow = entry.category === "dataflow";
+  const compliantVal = entry.compliant;
+  const compColor = compliantVal === true ? T.success : compliantVal === false ? T.danger : T.textDim;
+  const compLabel = compliantVal === true ? "✅ Compliant" : compliantVal === false ? "❌ Non-compliant" : null;
 
   const GlpiRow = ({ item, type }) => {
     // Dataflow row — for application-linked dataflows
@@ -602,7 +602,9 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onReviewChange, CAT_COLORS 
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 7 }}>
               <Badge label={entry.category} color={catColor} />
-              <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${rsInfo.color}20`, color: rsInfo.color, border: `1px solid ${rsInfo.color}40` }}>{rsInfo.label}</span>
+              {isDataflow && compLabel && (
+                <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${compColor}20`, color: compColor, border: `1px solid ${compColor}40` }}>{compLabel}</span>
+              )}
               {entry.source && <Badge label={entry.source} color={T.textDim} />}
               {glpiUrl && dfId && (
                 <a href={`${glpiUrl}/marketplace/dataflows/front/dataflow.form.php?id=${dfId}`} target="_blank" rel="noreferrer"
@@ -646,16 +648,6 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, onReviewChange, CAT_COLORS 
             )}
           </div>
 
-          {/* Review status row */}
-          <div style={{ padding: "10px 24px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-            <span style={{ fontSize: 11, color: T.textDim, marginRight: 4 }}>Review:</span>
-            {Object.entries(REVIEW_STATUS).map(([key, val]) => (
-              <button key={key} onClick={() => onReviewChange(entry.id, key)}
-                style={{ padding: "4px 12px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, background: rs === key ? `${val.color}25` : "transparent", color: rs === key ? val.color : T.textDim, border: `1px solid ${rs === key ? val.color + "50" : T.border}`, fontFamily: "inherit" }}>
-                {val.label}
-              </button>
-            ))}
-          </div>
 
           {/* GLPI Linked Items */}
           <div style={{ flex: 1, padding: "20px 24px", overflowY: "auto", minHeight: 200 }}>
@@ -725,7 +717,7 @@ const KnowledgeBase = ({ api }) => {
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
-  const [reviewFilter, setReviewFilter] = useState("all");
+  const [complianceFilter, setComplianceFilter] = useState("all");
   const [detailEntry, setDetailEntry] = useState(null);
 
   const load = async () => {
@@ -738,11 +730,6 @@ const KnowledgeBase = ({ api }) => {
   useEffect(() => { load(); }, [filter, search]);
 
   const deleteEntry = async (id) => { await api.del(`/api/knowledge/${id}`); load(); };
-
-  const setReviewStatus = async (id, status) => {
-    await api.put(`/api/knowledge/${id}`, { reviewStatus: status });
-    load();
-  };
 
   const CATS = ["all", "dataflow", "application"];
   const CAT_COLORS = { dataflow: T.danger, application: T.accent };
@@ -772,23 +759,28 @@ const KnowledgeBase = ({ api }) => {
         </div>
       </div>
 
-      {/* Review status filter */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 20, alignItems: "center" }}>
-        <span style={{ fontSize: 11, color: T.textDim, marginRight: 4 }}>Review:</span>
-        {["all", "pending", "to_be_reviewed", "approved", "ignore"].map(s => {
-          const active = reviewFilter === s;
-          const color = REVIEW_STATUS[s]?.color || T.accent;
-          return (
-            <button key={s} onClick={() => setReviewFilter(s)} style={{
-              padding: "4px 10px", borderRadius: 20, cursor: "pointer", fontSize: 11, fontWeight: 600,
-              background: active ? `${color}25` : "transparent",
-              color: active ? color : T.textMuted,
-              border: `1.5px solid ${active ? color + "60" : T.border}`,
-              fontFamily: "inherit", transition: "all 0.15s",
-            }}>{s}</button>
-          );
-        })}
-      </div>
+      {/* Compliance filter — only when viewing dataflows */}
+      {(filter === "all" || filter === "dataflow") && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 20, alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: T.textDim, marginRight: 4 }}>Compliance:</span>
+          {[
+            { key: "all",           label: "All",            color: T.accent   },
+            { key: "compliant",     label: "✅ Compliant",    color: T.success  },
+            { key: "non-compliant", label: "❌ Non-compliant", color: T.danger  },
+          ].map(({ key, label, color }) => {
+            const active = complianceFilter === key;
+            return (
+              <button key={key} onClick={() => setComplianceFilter(key)} style={{
+                padding: "4px 10px", borderRadius: 20, cursor: "pointer", fontSize: 11, fontWeight: 600,
+                background: active ? `${color}25` : "transparent",
+                color: active ? color : T.textMuted,
+                border: `1.5px solid ${active ? color + "60" : T.border}`,
+                fontFamily: "inherit", transition: "all 0.15s",
+              }}>{label}</button>
+            );
+          })}
+        </div>
+      )}
 
       {loading ? (
         <div style={{ textAlign: "center", padding: 48, color: T.textMuted, fontSize: 13 }}>Loading...</div>
@@ -797,10 +789,17 @@ const KnowledgeBase = ({ api }) => {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {entries
-            .filter(e => reviewFilter === "all" || (e.reviewStatus || "pending") === reviewFilter)
+            .filter(e => {
+              if (complianceFilter === "all") return true;
+              if (e.category !== "dataflow") return complianceFilter === "all";
+              if (complianceFilter === "compliant") return e.compliant === true;
+              if (complianceFilter === "non-compliant") return e.compliant === false;
+              return true;
+            })
             .map(entry => {
-              const rs = entry.reviewStatus || "pending";
-              const rsInfo = REVIEW_STATUS[rs] || REVIEW_STATUS.pending;
+              const eCompliant = entry.compliant;
+              const compColor = eCompliant === true ? T.success : eCompliant === false ? T.danger : T.textDim;
+              const compLabel = eCompliant === true ? "✅ Compliant" : eCompliant === false ? "❌ Non-compliant" : null;
               const kbGlpiUrl = (() => { try { return JSON.parse(localStorage.getItem('aria_config') || '{}').glpiUrl || ''; } catch { return ''; } })();
               const dfId = entry.dataflowId ||
                 (entry.tags || []).find(t => t.startsWith('dataflow-'))?.replace('dataflow-', '') ||
@@ -814,13 +813,15 @@ const KnowledgeBase = ({ api }) => {
               const kbGlpiLabel = dfId ? `GLPI Dataflow #${dfId}` : appId ? `GLPI App #${appId}` : null;
               return (
                 <Card key={entry.id} hoverable
-                  style={{ padding: "14px 18px", borderLeft: `3px solid ${rsInfo.color}40` }}
+                  style={{ padding: "14px 18px", borderLeft: `3px solid ${entry.category === "dataflow" ? compColor + "60" : (CAT_COLORS[entry.category] || T.accent) + "40"}` }}
                   onClick={() => setDetailEntry(entry)}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
                         <Badge label={entry.category} color={CAT_COLORS[entry.category] || T.accent} />
-                        <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${rsInfo.color}20`, color: rsInfo.color, border: `1px solid ${rsInfo.color}40` }}>{rsInfo.label}</span>
+                        {entry.category === "dataflow" && compLabel && (
+                          <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${compColor}20`, color: compColor, border: `1px solid ${compColor}40` }}>{compLabel}</span>
+                        )}
                         {entry.source && <Badge label={entry.source} color={T.textDim} />}
                         <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{entry.topic}</span>
                         {kbGlpiLink && (
@@ -845,20 +846,6 @@ const KnowledgeBase = ({ api }) => {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, marginLeft: 16, flexShrink: 0 }}>
                       <span style={{ fontSize: 10, color: T.textDim }}>{entry.createdAt?.substring(0, 10)}</span>
-                      {/* Quick review status buttons */}
-                      <div style={{ display: "flex", gap: 4 }}>
-                        {Object.entries(REVIEW_STATUS).map(([key, val]) => (
-                          <button key={key} onClick={e => { e.stopPropagation(); setReviewStatus(entry.id, key); }}
-                            title={`Mark as ${val.label}`}
-                            style={{
-                              padding: "2px 8px", borderRadius: 8, cursor: "pointer", fontSize: 10, fontWeight: 600,
-                              background: rs === key ? `${val.color}25` : "transparent",
-                              color: rs === key ? val.color : T.textDim,
-                              border: `1px solid ${rs === key ? val.color + "50" : T.border}`,
-                              fontFamily: "inherit",
-                            }}>{val.label}</button>
-                        ))}
-                      </div>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={e => { e.stopPropagation(); deleteEntry(entry.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: T.textDim, display: "flex" }}
                           onMouseEnter={e => e.currentTarget.style.color = T.danger}
@@ -882,10 +869,6 @@ const KnowledgeBase = ({ api }) => {
           api={api}
           CAT_COLORS={CAT_COLORS}
           onClose={() => setDetailEntry(null)}
-          onReviewChange={(id, status) => {
-            setReviewStatus(id, status);
-            setDetailEntry(prev => prev ? { ...prev, reviewStatus: status } : prev);
-          }}
         />
       )}
 

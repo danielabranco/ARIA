@@ -1259,16 +1259,16 @@ async function runDataflows(ctx) {
           `CREATE (k:Knowledge {
              id: $id, topic: $topic, content: $content,
              category: 'dataflow', source: 'glpi-sync',
-             glpiId: $glpiId,
+             glpiId: $glpiId, compliant: $compliant,
              tags: ['dataflow','glpi'], createdAt: $now
            })`,
-          { id: uuid(), topic: dfTopic, content: dfContent, glpiId: dfId, now }
+          { id: uuid(), topic: dfTopic, content: dfContent, glpiId: dfId, compliant: dfCompliant, now }
         );
       } else {
         for (const rec of kRes.records) {
           await s.run(
-            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.reviewStatus = null, k.glpiSyncedAt = $now`,
-            { id: rec.get('id'), topic: dfTopic, content: dfContent, now }
+            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.compliant = $compliant, k.reviewStatus = null, k.glpiSyncedAt = $now`,
+            { id: rec.get('id'), topic: dfTopic, content: dfContent, compliant: dfCompliant, now }
           );
         }
       }
@@ -1532,8 +1532,8 @@ async function runDataflowCompliance(ctx) {
       if (compIdx !== -1) content = content.substring(0, compIdx);
       content = content + section;
       await s.run(
-        `MATCH (k:Knowledge) WHERE k.id = $kid SET k.content = $content, k.reviewStatus = null`,
-        { kid, content }
+        `MATCH (k:Knowledge) WHERE k.id = $kid SET k.content = $content, k.reviewStatus = null, k.compliant = $compliant`,
+        { kid, content, compliant }
       );
     }
 
