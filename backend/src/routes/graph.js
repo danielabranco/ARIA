@@ -11,12 +11,19 @@ router.get('/', async (req, res) => {
     let result;
     if (appId) {
       result = await s.run(`
-        MATCH (center:Application { glpiId: $id }) WHERE center.glpiId IS NOT NULL AND center.glpiId <> ''
+        MATCH (center:Application { glpiId: $id })
+          WHERE center.glpiId IS NOT NULL AND center.glpiId <> ''
+            AND coalesce(center.source, 'glpi') <> 'training'
         OPTIONAL MATCH (center)-[r1:FEEDS_INTO]->(d:Dataflow) WHERE d.glpiId IS NOT NULL AND d.glpiId <> ''
-        OPTIONAL MATCH (d)-[r2:FEEDS_INTO]->(dest:Application) WHERE dest.glpiId IS NOT NULL AND dest.glpiId <> ''
-        OPTIONAL MATCH (src:Application)-[r3:FEEDS_INTO]->(center) WHERE src.glpiId IS NOT NULL AND src.glpiId <> ''
+        OPTIONAL MATCH (d)-[r2:FEEDS_INTO]->(dest:Application)
+          WHERE dest.glpiId IS NOT NULL AND dest.glpiId <> ''
+            AND coalesce(dest.source, 'glpi') <> 'training'
+        OPTIONAL MATCH (src:Application)-[r3:FEEDS_INTO]->(center)
+          WHERE src.glpiId IS NOT NULL AND src.glpiId <> ''
+            AND coalesce(src.source, 'glpi') <> 'training'
         OPTIONAL MATCH (src2:Application)-[r4:FEEDS_INTO]->(d2:Dataflow)-[r5:FEEDS_INTO]->(center)
           WHERE src2.glpiId IS NOT NULL AND src2.glpiId <> ''
+            AND coalesce(src2.source, 'glpi') <> 'training'
             AND d2.glpiId IS NOT NULL AND d2.glpiId <> ''
         WITH center,
           collect(distinct d) + collect(distinct d2) as dataflows,
@@ -29,9 +36,12 @@ router.get('/', async (req, res) => {
       `, { id: String(appId) });
     } else {
       result = await s.run(`
-        MATCH (n) WHERE n:Application OR (n:Dataflow AND n.glpiId IS NOT NULL AND n.glpiId <> '')
+        MATCH (n)
+          WHERE (n:Application AND coalesce(n.source, 'glpi') <> 'training')
+             OR (n:Dataflow AND n.glpiId IS NOT NULL AND n.glpiId <> '')
         OPTIONAL MATCH (n)-[r]->(m)
-          WHERE (m:Application OR (m:Dataflow AND m.glpiId IS NOT NULL AND m.glpiId <> ''))
+          WHERE ((m:Application AND coalesce(m.source, 'glpi') <> 'training')
+              OR (m:Dataflow AND m.glpiId IS NOT NULL AND m.glpiId <> ''))
             AND type(r) IN ['FEEDS_INTO','CONNECTS_TO']
         RETURN n, r, m LIMIT 600
       `);
