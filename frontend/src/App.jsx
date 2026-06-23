@@ -332,15 +332,17 @@ const Dashboard = ({ api, setPage }) => {
   }, []);
 
   const neo4jOk = health?.neo4j === "connected";
-  const compPct  = stats?.compliance?.percent ?? null;
-  const compColor = compPct === null ? T.textDim : compPct >= 80 ? T.success : compPct >= 50 ? T.warning : T.danger;
-  const compGlow  = compPct === null ? T.border : compPct >= 80 ? T.successGlow : compPct >= 50 ? T.warningGlow : T.dangerGlow;
+  const pctColor = pct => pct === null ? T.textDim : pct >= 80 ? T.success : pct >= 50 ? T.warning : T.danger;
+  const pctGlow  = pct => pct === null ? T.border : pct >= 80 ? T.successGlow : pct >= 50 ? T.warningGlow : T.dangerGlow;
+  const dfPct = stats?.compliance?.dataflows?.percent    ?? null;
+  const apPct = stats?.compliance?.applications?.percent ?? null;
   const statCards = [
-    { label: "Knowledge Entries", value: stats?.knowledge || 0, color: T.accent,   glow: T.accentGlow,   icon: "knowledge" },
-    { label: "Training Sessions", value: stats?.sessions  || 0, color: T.success,  glow: T.successGlow,  icon: "train"     },
-    { label: "Memory Items",      value: stats?.memory    || 0, color: T.warning,  glow: T.warningGlow,  icon: "memory"    },
-    { label: "Neo4j Graph",       value: neo4jOk ? "Live" : "Offline", color: neo4jOk ? T.success : T.danger, glow: neo4jOk ? T.successGlow : T.dangerGlow, icon: "link2" },
-    { label: "Dataflow Compliance", value: compPct !== null ? `${compPct}%` : "—", color: compColor, glow: compGlow, icon: "info" },
+    { label: "Knowledge Entries",      value: stats?.knowledge || 0, color: T.accent,  glow: T.accentGlow,  icon: "knowledge" },
+    { label: "Training Sessions",      value: stats?.sessions  || 0, color: T.success, glow: T.successGlow, icon: "train"     },
+    { label: "Memory Items",           value: stats?.memory    || 0, color: T.warning, glow: T.warningGlow, icon: "memory"    },
+    { label: "Neo4j Graph",            value: neo4jOk ? "Live" : "Offline", color: neo4jOk ? T.success : T.danger, glow: neo4jOk ? T.successGlow : T.dangerGlow, icon: "link2" },
+    { label: "Dataflow Compliance",    value: dfPct !== null ? `${dfPct}%` : "—", color: pctColor(dfPct), glow: pctGlow(dfPct), icon: "info" },
+    { label: "App Compliance",         value: apPct !== null ? `${apPct}%` : "—", color: pctColor(apPct), glow: pctGlow(apPct), icon: "link2" },
   ];
 
   const steps = [
@@ -364,7 +366,7 @@ const Dashboard = ({ api, setPage }) => {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 14, marginBottom: 24 }}>
         {statCards.map(s => (
           <Card key={s.label} style={{ padding: "20px 22px" }}>
             <div style={{ width: 34, height: 34, borderRadius: 9, background: s.glow, border: `1px solid ${s.color}25`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
@@ -792,7 +794,7 @@ const KnowledgeBase = ({ api }) => {
           {entries
             .filter(e => {
               if (complianceFilter === "all") return true;
-              if (e.category !== "dataflow") return complianceFilter === "all";
+              if (e.category !== "dataflow" && e.category !== "application") return true;
               if (complianceFilter === "compliant") return e.compliant === true;
               if (complianceFilter === "non-compliant") return e.compliant === false;
               return true;
@@ -814,13 +816,13 @@ const KnowledgeBase = ({ api }) => {
               const kbGlpiLabel = dfId ? `GLPI Dataflow #${dfId}` : appId ? `GLPI App #${appId}` : null;
               return (
                 <Card key={entry.id} hoverable
-                  style={{ padding: "14px 18px", borderLeft: `3px solid ${entry.category === "dataflow" ? compColor + "60" : (CAT_COLORS[entry.category] || T.accent) + "40"}` }}
+                  style={{ padding: "14px 18px", borderLeft: `3px solid ${(entry.category === "dataflow" || entry.category === "application") ? compColor + "60" : (CAT_COLORS[entry.category] || T.accent) + "40"}` }}
                   onClick={() => setDetailEntry(entry)}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
                         <Badge label={entry.category} color={CAT_COLORS[entry.category] || T.accent} />
-                        {entry.category === "dataflow" && compLabel && (
+                        {(entry.category === "dataflow" || entry.category === "application") && compLabel && (
                           <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${compColor}20`, color: compColor, border: `1px solid ${compColor}40` }}>{compLabel}</span>
                         )}
                         {entry.source && <Badge label={entry.source} color={T.textDim} />}
@@ -834,9 +836,40 @@ const KnowledgeBase = ({ api }) => {
                           </a>
                         )}
                       </div>
-                      <div style={{ fontSize: 12, color: T.textMuted, lineHeight: 1.6 }}>
-                        {(entry.content || "").substring(0, 200)}{entry.content?.length > 200 ? "..." : ""}
-                      </div>
+                      {(entry.category === "dataflow" || entry.category === "application") ? (() => {
+                        const rawSt = entry.dfStatus || '';
+                        const st = rawSt.toUpperCase();
+                        const stColor = st.includes('ACTIV') || st === 'IN USE' || st.includes(' USE') ? T.success
+                          : st.includes('DEVEL') ? T.warning
+                          : st.includes('REMOV') || st.includes('STOP') || st.includes('TO BE') ? T.danger
+                          : T.textDim;
+                        const cl = entry.dfGdpr || '';
+                        const clLower = cl.toLowerCase();
+                        const clColor = cl.includes('🔴') || clLower.includes('confidential') ? '#ef4444'
+                          : cl.includes('🟡') || clLower.includes('internal') ? '#f59e0b'
+                          : cl.includes('🟢') || clLower.includes('public') ? T.success
+                          : T.textDim;
+                        const tc = entry.ticketCount ?? '—';
+                        const cc = entry.changeCount ?? '—';
+                        const chipBase = { fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap' };
+                        return (
+                          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {rawSt && <span style={{ ...chipBase, background: `${stColor}20`, color: stColor, border: `1px solid ${stColor}40` }}>{rawSt}</span>}
+                              {cl && <span style={{ ...chipBase, background: `${clColor}20`, color: clColor, border: `1px solid ${clColor}40` }}>{cl}</span>}
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, fontSize: 11, color: T.textMuted }}>
+                              <span>🎫 <strong style={{ color: T.text }}>{tc}</strong> tickets</span>
+                              <span>·</span>
+                              <span>🔄 <strong style={{ color: T.text }}>{cc}</strong> changes</span>
+                            </div>
+                          </div>
+                        );
+                      })() : (
+                        <div style={{ fontSize: 12, color: T.textMuted, lineHeight: 1.6 }}>
+                          {(entry.content || "").substring(0, 200)}{entry.content?.length > 200 ? "..." : ""}
+                        </div>
+                      )}
                       {entry.tags?.length > 0 && (
                         <div style={{ marginTop: 8, display: "flex", gap: 5, flexWrap: "wrap" }}>
                           {entry.tags.map(t => (
