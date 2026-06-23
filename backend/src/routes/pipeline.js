@@ -1040,6 +1040,29 @@ async function runAppCompliance(ctx) {
   return { total, compliant: compliantCount, nonCompliant: total - compliantCount, compliancePercent: pct };
 }
 
+const fetchAppSub = async (baseUrl, appId, subType, sessionToken, appToken) => {
+  const agent = baseUrl.startsWith('https') ? httpsAgent : undefined;
+  const url = `${baseUrl}/apirest.php/PluginArchiswSwcomponent/${appId}/${subType}?range=0-999&expand_dropdowns=true`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    enforceGetOnly('GET');
+    const r = await fetch(url, {
+      method: 'GET',
+      headers: { 'Session-Token': sessionToken, 'App-Token': appToken, 'Content-Type': 'application/json' },
+      agent,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (r.status !== 200 && r.status !== 206) return [];
+    const body = await r.json();
+    return Array.isArray(body) ? body : (body.data || []);
+  } catch {
+    clearTimeout(timer);
+    return [];
+  }
+};
+
 async function runAppStructuresHistory(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
   const now = new Date().toISOString();
