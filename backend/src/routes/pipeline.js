@@ -39,6 +39,7 @@ const STAGES = [
   { id: 'dataflow_itsm_links',       label: 'Dataflow ITSM Links',          tier: 'hourly',  desc: 'Fetch all tickets, changes, problems and projects linked to dataflows via GLPI junction tables — creates HAS_TICKET, HAS_CHANGE, HAS_PROBLEM, HAS_PROJECT relationships',  endpoint: 'GET /Item_Ticket + Change_Item + Item_Problem + Item_Project {searchText[itemtype]=PluginDataflowsDataflow, all at once}' },
   { id: 'stub_enrichment',           label: 'Stub Enrichment',              tier: 'hourly',  desc: 'Individually fetch any Ticket/Change/Problem nodes linked to dataflows or applications that have no name — fills gaps left by deleted or access-restricted items', endpoint: 'GET /Ticket/{id} + Change/{id} + Problem/{id} {stubs only}' },
   { id: 'dataflow_compliance',       label: 'Dataflow Compliance',          tier: 'nightly', desc: 'Evaluate each Dataflow against IT.WI.019/R03 mandatory fields (name format, GDPR label, from/to app, protocol) — sets compliant property on Dataflow nodes and adds a Compliance section to each Knowledge entry', endpoint: 'Neo4j only (no GLPI calls)' },
+  { id: 'app_compliance',            label: 'App Compliance',               tier: 'nightly', desc: 'Evaluate each Application against IT.WI.017/R00 mandatory fields (status, type, McFarlan Matrix, security classification, supplier, service level, owner) — sets compliant property on Application nodes and adds a Compliance section to each Knowledge entry', endpoint: 'Neo4j only (no GLPI calls)' },
   { id: 'app_itsm_links',            label: 'App ITSM Links',               tier: 'hourly',  desc: 'Fetch all tickets and changes linked to application structures via GLPI junction tables — creates HAS_TICKET, HAS_CHANGE relationships on Application nodes',   endpoint: 'GET /Item_Ticket + Change_Item {searchText[itemtype]=PluginArchiswSwcomponent, all at once}' },
   { id: 'dataflow_associated_items', label: 'Dataflow Associated Items',   tier: 'nightly', desc: 'Fetch items associated with each dataflow from PluginDataflowsDataflow_Item (apps, etc.) — groups client-side, creates ASSOCIATED_WITH relationships',         endpoint: 'GET /PluginDataflowsDataflow_Item {all at once, grouped client-side}' },
   { id: 'app_associated_items',      label: 'App Associated Items',         tier: 'nightly', desc: 'Fetch items associated with each application from PluginArchiswSwcomponent_Item — groups client-side, creates ASSOCIATED_WITH relationships',                  endpoint: 'GET /PluginArchiswSwcomponent_Item {all at once, grouped client-side}' },
@@ -742,6 +743,26 @@ async function runAppStructures(ctx) {
     const appDateMod     = item.date_mod ? String(item.date_mod).substring(0, 10) : '';
     const now            = new Date().toISOString();
 
+    const appOwnerLeaf = dec(appOwner).split('>').pop().trim();
+
+    const _aStatusOk  = !!(appStatus   && appStatus.trim());
+    const _aTypeOk    = !!(appType     && appType.trim());
+    const _aTargetsOk = !!(appTargets  && appTargets.trim());
+    const _aDataClOk  = !!(appDataClass && appDataClass.trim());
+    const _aSupplOk   = !!(appSupplier && appSupplier.trim());
+    const _aSlaOk     = !!(appSla      && appSla.trim());
+    const _aOwnerOk   = !!(appOwner    && appOwner.trim());
+    const _aCIssues   = [
+      ...(_aStatusOk  ? [] : ['status']),
+      ...(_aTypeOk    ? [] : ['type']),
+      ...(_aTargetsOk ? [] : ['McFarlan Matrix']),
+      ...(_aDataClOk  ? [] : ['security classification']),
+      ...(_aSupplOk   ? [] : ['supplier']),
+      ...(_aSlaOk     ? [] : ['service level']),
+      ...(_aOwnerOk   ? [] : ['component owner']),
+    ];
+    const appCompliant = _aCIssues.length === 0;
+
     await s.run(
       `MERGE (a:Application { name: $name })
        SET a.glpiId = $id, a.type = $type, a.entity = $entity,
@@ -752,7 +773,7 @@ async function runAppStructures(ctx) {
            a.status = $status, a.statusDate = $statusDate, a.devLanguage = $devLang,
            a.inUseSince = $inUseSince, a.dataClassification = $dataClass,
            a.repo = $repo, a.healthCheck = $healthCheck, a.version = $version,
-           a.updatedAt = $now`,
+           a.compliant = $compliant, a.updatedAt = $now`,
       {
         name: appName, id: appId, type: appType, entity: appEntity,
         desc: appDesc, comment: appComment, status: appStatus, statusDate: appStatusDate,
@@ -760,7 +781,8 @@ async function runAppStructures(ctx) {
         owner: appOwner, sla: appSla, instances: appInstances,
         database: appDatabase, location: appLocation, targets: appTargets,
         devLang: appDevLang, inUseSince: appInUseSince, dataClass: appDataClass,
-        repo: appRepo, healthCheck: appHealthCheck, version: appVersion, now,
+        repo: appRepo, healthCheck: appHealthCheck, version: appVersion,
+        compliant: appCompliant, now,
       }
     );
 
@@ -798,7 +820,7 @@ async function runAppStructures(ctx) {
         '### Ownership',
         '| Field | Value |',
         '|---|---|',
-        row('Owner Group', appOwner),
+        row('Owner Group', appOwnerLeaf),
         row('Supplier',    appSupplier),
         '',
         '### Access',
@@ -808,6 +830,23 @@ async function runAppStructures(ctx) {
         linkRow('QA URL',         appUrlQA),
         linkRow('Health Check',   appHealthCheck),
         linkRow('Repository',     appRepo),
+        '',
+        '### Compliance',
+        '| Field | Status |',
+        '|---|---|',
+        `| Status | ${_aStatusOk  ? '✅' : '❌'} |`,
+        `| Type | ${_aTypeOk    ? '✅' : '❌'} |`,
+        `| McFarlan Matrix | ${_aTargetsOk ? '✅' : '❌'} |`,
+        `| Security Classification | ${_aDataClOk  ? '✅' : '❌'} |`,
+        `| Supplier | ${_aSupplOk   ? '✅' : '❌'} |`,
+        `| Service Level (SLA) | ${_aSlaOk     ? '✅' : '❌'} |`,
+        `| Component Owner | ${_aOwnerOk   ? '✅' : '❌'} |`,
+        `| Risk Assessment | ⚠️ Not tracked |`,
+        `| Maintenance Schedule | ⚠️ Not tracked |`,
+        `| Backup Requirements | ⚠️ Not tracked |`,
+        `| Associable to Ticket | ⚠️ Not tracked |`,
+        '',
+        appCompliant ? '**✅ Compliant**' : `**❌ Non-compliant** — missing: ${_aCIssues.join(', ')}`,
       ].filter(v => v !== null && v !== undefined).join('\n');
 
       // toString() handles glpiId stored as integer by older sync runs
@@ -827,24 +866,29 @@ async function runAppStructures(ctx) {
           `MATCH (k:Knowledge) WHERE k.id = $id
            SET k.topic = $topic, k.content = $content, k.glpiId = $glpiId,
                k.supplier = $supplier, k.urlProd = $urlProd, k.urlQA = $urlQA,
-               k.owner = $owner, k.sla = $sla, k.glpiSyncedAt = $now`,
+               k.owner = $owner, k.sla = $sla,
+               k.compliant = $compliant, k.dfStatus = $dfStatus, k.dfGdpr = $dfGdpr,
+               k.reviewStatus = null, k.glpiSyncedAt = $now`,
           { id: keepId, topic: appTopic, content, glpiId: appId,
             supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
-            owner: appOwner, sla: appSla, now }
+            owner: appOwner, sla: appSla,
+            compliant: appCompliant, dfStatus: appStatus, dfGdpr: appDataClass, now }
         );
       } else {
         await s.run(
           `CREATE (k:Knowledge {
              id: $id, topic: $topic, content: $content,
              category: 'application', source: 'glpi-sync',
-             glpiId: $glpiId, reviewStatus: 'to_be_reviewed',
+             glpiId: $glpiId,
              supplier: $supplier, urlProd: $urlProd, urlQA: $urlQA,
-             owner: $owner, sla: $sla, glpiSyncedAt: $now,
+             owner: $owner, sla: $sla,
+             compliant: $compliant, dfStatus: $dfStatus, dfGdpr: $dfGdpr,
              tags: ['application','glpi'], createdAt: $now
            })`,
           { id: uuid(), topic: appTopic, content, glpiId: appId,
             supplier: appSupplier, urlProd: appUrlProd, urlQA: appUrlQA,
-            owner: appOwner, sla: appSla, now }
+            owner: appOwner, sla: appSla,
+            compliant: appCompliant, dfStatus: appStatus, dfGdpr: appDataClass, now }
         );
       }
     } catch {}
@@ -897,6 +941,104 @@ const fetchAppLinkedItems = async (base, appId, subType, glpiType, sessionToken,
     return items.filter(Boolean);
   } catch { clearTimeout(timer); return []; }
 };
+
+async function runAppCompliance(ctx) {
+  const { s } = ctx;
+  const res = await s.run(`MATCH (a:Application) WHERE a.glpiId IS NOT NULL
+    RETURN a.glpiId AS id, a.status AS status, a.type AS type, a.targets AS targets,
+           a.dataClassification AS dataClass, a.supplier AS supplier,
+           a.sla AS sla, a.owner AS owner`);
+  let total = 0, compliantCount = 0;
+
+  for (const rec of res.records) {
+    const id       = rec.get('id');
+    const status   = rec.get('status')    || '';
+    const type     = rec.get('type')      || '';
+    const targets  = rec.get('targets')   || '';
+    const dataClass = rec.get('dataClass') || '';
+    const supplier = rec.get('supplier')  || '';
+    const sla      = rec.get('sla')       || '';
+    const owner    = rec.get('owner')     || '';
+
+    const statusOk  = !!(status   && status.trim());
+    const typeOk    = !!(type     && type.trim());
+    const targetsOk = !!(targets  && targets.trim());
+    const dataClOk  = !!(dataClass && dataClass.trim());
+    const supplOk   = !!(supplier && supplier.trim());
+    const slaOk     = !!(sla      && sla.trim());
+    const ownerOk   = !!(owner    && owner.trim());
+    const issues = [
+      ...(statusOk  ? [] : ['status']),
+      ...(typeOk    ? [] : ['type']),
+      ...(targetsOk ? [] : ['McFarlan Matrix']),
+      ...(dataClOk  ? [] : ['security classification']),
+      ...(supplOk   ? [] : ['supplier']),
+      ...(slaOk     ? [] : ['service level']),
+      ...(ownerOk   ? [] : ['component owner']),
+    ];
+    const compliant = issues.length === 0;
+    if (compliant) compliantCount++;
+
+    await s.run(
+      `MATCH (a:Application { glpiId: $id }) SET a.compliant = $compliant`,
+      { id, compliant }
+    );
+
+    const cntRes = await s.run(
+      `MATCH (a:Application { glpiId: $id })
+       OPTIONAL MATCH (a)-[:HAS_TICKET]->(t:Ticket)
+       OPTIONAL MATCH (a)-[:HAS_CHANGE]->(c:Change)
+       RETURN count(DISTINCT t) AS tc, count(DISTINCT c) AS cc`,
+      { id }
+    );
+    const ticketCount = cntRes.records[0]?.get('tc').toNumber() || 0;
+    const changeCount = cntRes.records[0]?.get('cc').toNumber() || 0;
+
+    const section = [
+      '',
+      '### Compliance',
+      '| Field | Status |',
+      '|---|---|',
+      `| Status | ${statusOk  ? '✅' : '❌'} |`,
+      `| Type | ${typeOk    ? '✅' : '❌'} |`,
+      `| McFarlan Matrix | ${targetsOk ? '✅' : '❌'} |`,
+      `| Security Classification | ${dataClOk  ? '✅' : '❌'} |`,
+      `| Supplier | ${supplOk   ? '✅' : '❌'} |`,
+      `| Service Level (SLA) | ${slaOk     ? '✅' : '❌'} |`,
+      `| Component Owner | ${ownerOk   ? '✅' : '❌'} |`,
+      `| Risk Assessment | ⚠️ Not tracked |`,
+      `| Maintenance Schedule | ⚠️ Not tracked |`,
+      `| Backup Requirements | ⚠️ Not tracked |`,
+      `| Associable to Ticket | ⚠️ Not tracked |`,
+      '',
+      compliant ? '**✅ Compliant**' : `**❌ Non-compliant** — missing: ${issues.join(', ')}`,
+    ].join('\n');
+
+    const kRes = await s.run(
+      `MATCH (k:Knowledge) WHERE k.category = 'application' AND toString(k.glpiId) = $id RETURN k.id AS kid, k.content AS kc`,
+      { id }
+    );
+    for (const kRec of kRes.records) {
+      const kid = kRec.get('kid');
+      let content = kRec.get('kc') || '';
+      const compIdx = content.indexOf('\n### Compliance\n');
+      if (compIdx !== -1) content = content.substring(0, compIdx);
+      content = content + section;
+      await s.run(
+        `MATCH (k:Knowledge) WHERE k.id = $kid
+         SET k.content = $content, k.reviewStatus = null,
+             k.compliant = $compliant, k.dfStatus = $dfStatus, k.dfGdpr = $dfGdpr,
+             k.ticketCount = $tc, k.changeCount = $cc`,
+        { kid, content, compliant, dfStatus: status, dfGdpr: dataClass, tc: ticketCount, cc: changeCount }
+      );
+    }
+
+    total++;
+  }
+
+  const pct = total > 0 ? Math.round((compliantCount / total) * 100) : 0;
+  return { total, compliant: compliantCount, nonCompliant: total - compliantCount, compliancePercent: pct };
+}
 
 async function runAppStructuresHistory(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
@@ -1251,7 +1393,7 @@ async function runDataflows(ctx) {
       ].filter(v => v !== undefined && v !== null).join('\n');
 
       const kRes = await s.run(
-        `MATCH (k:Knowledge) WHERE k.category = 'dataflow' AND k.glpiId = $glpiId RETURN k.id AS id`,
+        `MATCH (k:Knowledge) WHERE k.category = 'dataflow' AND toString(k.glpiId) = $glpiId RETURN k.id AS id ORDER BY k.createdAt ASC`,
         { glpiId: dfId }
       );
       if (kRes.records.length === 0) {
@@ -1524,7 +1666,7 @@ async function runDataflowCompliance(ctx) {
     ].join('\n');
 
     const kRes = await s.run(
-      `MATCH (k:Knowledge) WHERE k.category = 'dataflow' AND k.glpiId = $id RETURN k.id AS kid, k.content AS kc`,
+      `MATCH (k:Knowledge) WHERE k.category = 'dataflow' AND toString(k.glpiId) = $id RETURN k.id AS kid, k.content AS kc`,
       { id }
     );
     for (const kRec of kRes.records) {
@@ -1694,6 +1836,7 @@ const RUNNERS = {
   dataflow_itsm_links:       runDataflowITSMLinks,
   stub_enrichment:           runStubEnrichment,
   dataflow_compliance:       runDataflowCompliance,
+  app_compliance:            runAppCompliance,
   app_itsm_links:            runAppITSMLinks,
   dataflow_associated_items: runDataflowAssociatedItems,
   app_associated_items:      runAppAssociatedItems,
