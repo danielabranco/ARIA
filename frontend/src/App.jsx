@@ -437,6 +437,7 @@ const GLPI_PRIORITY = {
   5: { label: "Very High", color: "#dc2626" },
   6: { label: "Major",     color: "#7f1d1d" },
 };
+const decodeHTMLEntities = s => (s || '').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 
 const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
   const [activeTab, setActiveTab] = useState("changes");
@@ -563,7 +564,7 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${status.color}20`, color: status.color, border: `1px solid ${status.color}40` }}>{status.label}</span>
             {priority && <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${priority.color}20`, color: priority.color }}>{priority.label}</span>}
-            {item.itilcategories_id && <span style={{ fontSize: 10, color: T.textDim }}>{item.itilcategories_id}</span>}
+            {item.itilcategories_id && <span style={{ fontSize: 10, color: T.textDim }}>{decodeHTMLEntities(item.itilcategories_id)}</span>}
             {(item.date || item.date_mod) && <span style={{ fontSize: 10, color: T.textDim }}>{(item.date || item.date_mod)?.substring(0, 10)}</span>}
           </div>
           {item.content && (
