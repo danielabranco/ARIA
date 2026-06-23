@@ -787,7 +787,7 @@ const KnowledgeBase = ({ api }) => {
       ) : entries.length === 0 ? (
         <Card><EmptyState icon="knowledge" title="Knowledge base is empty" description="Import from GLPI or add entries through training sessions." /></Card>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
           {entries
             .filter(e => {
               if (complianceFilter === "all") return true;
@@ -811,77 +811,80 @@ const KnowledgeBase = ({ api }) => {
                 ? `${kbGlpiUrl}/marketplace/archisw/front/swcomponent.form.php?id=${appId}`
                 : null;
               const kbGlpiLabel = dfId ? `GLPI Dataflow #${dfId}` : appId ? `GLPI App #${appId}` : null;
+              const accentBorder = entry.category === "dataflow" ? compColor + "90" : (CAT_COLORS[entry.category] || T.accent) + "60";
               return (
                 <Card key={entry.id} hoverable
-                  style={{ padding: "14px 18px", borderLeft: `3px solid ${entry.category === "dataflow" ? compColor + "60" : (CAT_COLORS[entry.category] || T.accent) + "40"}` }}
+                  style={{ padding: "14px 16px", borderTop: `3px solid ${accentBorder}`, display: "flex", flexDirection: "column", gap: 8 }}
                   onClick={() => setDetailEntry(entry)}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
-                        <Badge label={entry.category} color={CAT_COLORS[entry.category] || T.accent} />
-                        {entry.category === "dataflow" && compLabel && (
-                          <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${compColor}20`, color: compColor, border: `1px solid ${compColor}40` }}>{compLabel}</span>
-                        )}
-                        {entry.source && <Badge label={entry.source} color={T.textDim} />}
-                        <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{entry.topic}</span>
-                        {kbGlpiLink && (
-                          <a href={kbGlpiLink} target="_blank" rel="noreferrer"
-                            onClick={e => e.stopPropagation()}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 600, color: T.accent, textDecoration: 'none', padding: '2px 8px', borderRadius: 10, background: T.accentGlow, border: `1px solid ${T.accent}30` }}>
-                            <Icon name="link2" size={10} color={T.accent} />
-                            {kbGlpiLabel}
-                          </a>
-                        )}
-                      </div>
-                      {entry.category === "dataflow" ? (() => {
-                        const st = (entry.dfStatus || '').toUpperCase();
-                        const stColor = st.includes('ACTIV') ? T.success : st.includes('DEVEL') ? T.warning : st.includes('REMOV') || st.includes('STOP') ? T.danger : T.textDim;
-                        const gdpr = entry.dfGdpr || '';
-                        const gdprColor = gdpr.includes('🔴') ? '#ef4444' : gdpr.includes('🟡') ? '#f59e0b' : gdpr.includes('🟢') ? T.success : T.textDim;
-                        const tc = entry.ticketCount ?? '—';
-                        const cc = entry.changeCount ?? '—';
-                        return (
-                          <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 5 }}>
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                              {st && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: `${stColor}18`, color: stColor, border: `1px solid ${stColor}40` }}>{st}</span>}
-                              {gdpr && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: `${gdprColor}15`, color: gdprColor, border: `1px solid ${gdprColor}35`, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={gdpr}>{gdpr}</span>}
-                            </div>
-                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                              <span style={{ fontSize: 10, color: T.textMuted, display: "flex", alignItems: "center", gap: 3 }}>
-                                <span style={{ fontSize: 11 }}>🎫</span> <strong style={{ color: T.text }}>{tc}</strong> ticket{tc !== 1 ? 's' : ''}
-                              </span>
-                              <span style={{ color: T.border }}>·</span>
-                              <span style={{ fontSize: 10, color: T.textMuted, display: "flex", alignItems: "center", gap: 3 }}>
-                                <span style={{ fontSize: 11 }}>🔄</span> <strong style={{ color: T.text }}>{cc}</strong> change{cc !== 1 ? 's' : ''}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })() : (
-                        <div style={{ fontSize: 12, color: T.textMuted, lineHeight: 1.6 }}>
-                          {(entry.content || "").substring(0, 200)}{entry.content?.length > 200 ? "..." : ""}
-                        </div>
+                  {/* Top row: badges + date/delete */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                    <div style={{ display: "flex", gap: 5, alignItems: "center", flexWrap: "wrap" }}>
+                      <Badge label={entry.category} color={CAT_COLORS[entry.category] || T.accent} />
+                      {entry.category === "dataflow" && compLabel && (
+                        <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 10, background: `${compColor}20`, color: compColor, border: `1px solid ${compColor}40` }}>{compLabel}</span>
                       )}
-                      {entry.tags?.length > 0 && (
-                        <div style={{ marginTop: 8, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                          {entry.tags.map(t => (
-                            <span key={t} style={{ fontSize: 10, background: T.border, color: T.textMuted, borderRadius: 4, padding: "2px 7px" }}>{t}</span>
-                          ))}
-                        </div>
-                      )}
+                      {entry.source && <Badge label={entry.source} color={T.textDim} />}
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, marginLeft: 16, flexShrink: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                       <span style={{ fontSize: 10, color: T.textDim }}>{entry.createdAt?.substring(0, 10)}</span>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={e => { e.stopPropagation(); deleteEntry(entry.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: T.textDim, display: "flex" }}
-                          onMouseEnter={e => e.currentTarget.style.color = T.danger}
-                          onMouseLeave={e => e.currentTarget.style.color = T.textDim}
-                          title="Delete">
-                          <Icon name="trash" size={14} color="currentColor" />
-                        </button>
-                      </div>
+                      <button onClick={e => { e.stopPropagation(); deleteEntry(entry.id); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: 3, color: T.textDim, display: "flex" }}
+                        onMouseEnter={e => e.currentTarget.style.color = T.danger}
+                        onMouseLeave={e => e.currentTarget.style.color = T.textDim}
+                        title="Delete">
+                        <Icon name="trash" size={13} color="currentColor" />
+                      </button>
                     </div>
                   </div>
+                  {/* Title */}
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.text, lineHeight: 1.4 }}>{entry.topic}</div>
+                  {/* GLPI link */}
+                  {kbGlpiLink && (
+                    <a href={kbGlpiLink} target="_blank" rel="noreferrer"
+                      onClick={e => e.stopPropagation()}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 600, color: T.accent, textDecoration: 'none', padding: '2px 8px', borderRadius: 10, background: T.accentGlow, border: `1px solid ${T.accent}30`, alignSelf: "flex-start" }}>
+                      <Icon name="link2" size={10} color={T.accent} />
+                      {kbGlpiLabel}
+                    </a>
+                  )}
+                  {/* Body: dataflow status or content preview */}
+                  {entry.category === "dataflow" ? (() => {
+                    const st = (entry.dfStatus || '').toUpperCase();
+                    const stColor = st.includes('ACTIV') ? T.success : st.includes('DEVEL') ? T.warning : st.includes('REMOV') || st.includes('STOP') ? T.danger : T.textDim;
+                    const gdpr = entry.dfGdpr || '';
+                    const gdprColor = gdpr.includes('🔴') ? '#ef4444' : gdpr.includes('🟡') ? '#f59e0b' : gdpr.includes('🟢') ? T.success : T.textDim;
+                    const tc = entry.ticketCount ?? '—';
+                    const cc = entry.changeCount ?? '—';
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+                          {st && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 6, background: `${stColor}18`, color: stColor, border: `1px solid ${stColor}40` }}>{st}</span>}
+                          {gdpr && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: `${gdprColor}15`, color: gdprColor, border: `1px solid ${gdprColor}35`, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={gdpr}>{gdpr}</span>}
+                        </div>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          <span style={{ fontSize: 10, color: T.textMuted, display: "flex", alignItems: "center", gap: 3 }}>
+                            <span style={{ fontSize: 11 }}>🎫</span> <strong style={{ color: T.text }}>{tc}</strong> ticket{tc !== 1 ? 's' : ''}
+                          </span>
+                          <span style={{ color: T.border }}>·</span>
+                          <span style={{ fontSize: 10, color: T.textMuted, display: "flex", alignItems: "center", gap: 3 }}>
+                            <span style={{ fontSize: 11 }}>🔄</span> <strong style={{ color: T.text }}>{cc}</strong> change{cc !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })() : (
+                    <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.6 }}>
+                      {(entry.content || "").substring(0, 120)}{(entry.content?.length ?? 0) > 120 ? "…" : ""}
+                    </div>
+                  )}
+                  {/* Tags pinned to bottom */}
+                  {entry.tags?.length > 0 && (
+                    <div style={{ marginTop: "auto", paddingTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {entry.tags.map(t => (
+                        <span key={t} style={{ fontSize: 10, background: T.border, color: T.textMuted, borderRadius: 4, padding: "2px 7px" }}>{t}</span>
+                      ))}
+                    </div>
+                  )}
                 </Card>
               );
           })}
