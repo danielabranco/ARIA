@@ -1328,21 +1328,23 @@ const fetchDataflowSub = async (baseUrl, dfId, subType, sessionToken, appToken) 
 async function runDataflowITSMLinks(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
 
-  // ① Fetch all 4 junction tables in parallel — one request each, all dataflows covered
+  // ① Fetch all 4 junction tables in parallel — no searchText filter (LIKE-match is unreliable on
+  //   junction tables; itemtype is verified client-side below, same pattern as runDataflowAssociatedItems)
   const [itemTickets, changeItems, itemProblems, itemProjects] = await Promise.all([
-    fetchAllPages(baseUrl, 'Item_Ticket?searchText[itemtype]=PluginDataflowsDataflow', sessionToken, appToken),
-    fetchAllPages(baseUrl, 'Change_Item?searchText[itemtype]=PluginDataflowsDataflow', sessionToken, appToken),
-    fetchAllPages(baseUrl, 'Item_Problem?searchText[itemtype]=PluginDataflowsDataflow', sessionToken, appToken),
-    fetchAllPages(baseUrl, 'Item_Project?searchText[itemtype]=PluginDataflowsDataflow', sessionToken, appToken),
+    fetchAllPages(baseUrl, 'Item_Ticket', sessionToken, appToken),
+    fetchAllPages(baseUrl, 'Change_Item', sessionToken, appToken),
+    fetchAllPages(baseUrl, 'Item_Problem', sessionToken, appToken),
+    fetchAllPages(baseUrl, 'Item_Project', sessionToken, appToken),
   ]);
 
-  // ② Group by dataflow ID client-side
+  // ② Group by dataflow ID client-side — guard on itemtype so rows for Tickets, Computers, etc.
+  //   (which share the same items_id number-space as Dataflows) are never misattributed
   const byDf = {};
   const ensure = id => { if (!byDf[id]) byDf[id] = { tickets: [], changes: [], problems: [], projects: [] }; };
-  for (const row of itemTickets)  { const id = String(row.items_id);     ensure(id); byDf[id].tickets.push(String(row.tickets_id)); }
-  for (const row of changeItems)  { const id = String(row.items_id);     ensure(id); byDf[id].changes.push(String(row.changes_id)); }
-  for (const row of itemProblems) { const id = String(row.items_id);     ensure(id); byDf[id].problems.push(String(row.problems_id)); }
-  for (const row of itemProjects) { const id = String(row.items_id);     ensure(id); byDf[id].projects.push(String(row.projects_id)); }
+  for (const row of itemTickets)  { if (row.itemtype !== 'PluginDataflowsDataflow') continue; const id = String(row.items_id); ensure(id); byDf[id].tickets.push(String(row.tickets_id)); }
+  for (const row of changeItems)  { if (row.itemtype !== 'PluginDataflowsDataflow') continue; const id = String(row.items_id); ensure(id); byDf[id].changes.push(String(row.changes_id)); }
+  for (const row of itemProblems) { if (row.itemtype !== 'PluginDataflowsDataflow') continue; const id = String(row.items_id); ensure(id); byDf[id].problems.push(String(row.problems_id)); }
+  for (const row of itemProjects) { if (row.itemtype !== 'PluginDataflowsDataflow') continue; const id = String(row.items_id); ensure(id); byDf[id].projects.push(String(row.projects_id)); }
 
   // ③ Write stub nodes + rels to Neo4j sequentially — MERGE is idempotent
   let count = 0;
