@@ -721,6 +721,7 @@ const KnowledgeBase = ({ api }) => {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [complianceFilter, setComplianceFilter] = useState("all");
+  const [kbView, setKbView] = useState("grid");
   const [detailEntry, setDetailEntry] = useState(null);
 
   const load = async () => {
@@ -760,6 +761,16 @@ const KnowledgeBase = ({ api }) => {
             );
           })}
         </div>
+        <div style={{ display: "flex", gap: 2, borderRadius: 8, overflow: "hidden", border: `1px solid ${T.border}` }}>
+          {[{ v: "grid", icon: "⊞" }, { v: "list", icon: "≡" }].map(({ v, icon }) => (
+            <button key={v} onClick={() => setKbView(v)} style={{
+              padding: "5px 10px", cursor: "pointer", fontSize: 14, fontWeight: 600,
+              background: kbView === v ? T.accentGlow : "transparent",
+              color: kbView === v ? T.accent : T.textDim,
+              border: "none", fontFamily: "inherit", transition: "all 0.15s",
+            }}>{icon}</button>
+          ))}
+        </div>
       </div>
 
       {/* Compliance filter — only when viewing dataflows */}
@@ -789,74 +800,146 @@ const KnowledgeBase = ({ api }) => {
         <div style={{ textAlign: "center", padding: 48, color: T.textMuted, fontSize: 13 }}>Loading...</div>
       ) : entries.length === 0 ? (
         <Card><EmptyState icon="knowledge" title="Knowledge base is empty" description="Import from GLPI or add entries through training sessions." /></Card>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {entries
-            .filter(e => {
-              if (complianceFilter === "all") return true;
-              if (e.category !== "dataflow" && e.category !== "application") return true;
-              if (complianceFilter === "compliant") return e.compliant === true;
-              if (complianceFilter === "non-compliant") return e.compliant === false;
-              return true;
-            })
-            .map(entry => {
+      ) : (() => {
+        const kbGlpiUrl = (() => { try { return JSON.parse(localStorage.getItem('aria_config') || '{}').glpiUrl || ''; } catch { return ''; } })();
+        const chipSm = { fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 6, whiteSpace: "nowrap" };
+
+        const renderIndicators = entry => {
+          const rawSt = entry.dfStatus || '';
+          const st = rawSt.toUpperCase();
+          const stColor = st.includes('ACTIV') || st === 'IN USE' || st.includes(' USE') ? T.success
+            : st.includes('DEVEL') ? T.warning
+            : st.includes('REMOV') || st.includes('STOP') || st.includes('TO BE') ? T.danger : T.textDim;
+          const cl = entry.dfGdpr || '';
+          const clLower = cl.toLowerCase();
+          const clColor = cl.includes('🔴') || clLower.includes('confidential') ? '#ef4444'
+            : cl.includes('🟡') || clLower.includes('internal') ? '#f59e0b'
+            : cl.includes('🟢') || clLower.includes('public') ? T.success : T.textDim;
+          const tc = entry.ticketCount ?? '—';
+          const cc = entry.changeCount ?? '—';
+          return { rawSt, stColor, cl, clColor, tc, cc };
+        };
+
+        const filtered = entries.filter(e => {
+          if (complianceFilter === "all") return true;
+          if (e.category !== "dataflow" && e.category !== "application") return true;
+          if (complianceFilter === "compliant") return e.compliant === true;
+          if (complianceFilter === "non-compliant") return e.compliant === false;
+          return true;
+        });
+
+        const hasInd = e => e.category === "dataflow" || e.category === "application";
+
+        const glpiLink = entry => {
+          const dfId = entry.dataflowId || (entry.tags || []).find(t => t.startsWith('dataflow-'))?.replace('dataflow-', '') || (entry.category === 'dataflow' ? entry.glpiId : null);
+          const appId = entry.category !== 'dataflow' ? entry.glpiId : null;
+          const link = kbGlpiUrl && dfId ? `${kbGlpiUrl}/marketplace/dataflows/front/dataflow.form.php?id=${dfId}`
+            : kbGlpiUrl && appId ? `${kbGlpiUrl}/marketplace/archisw/front/swcomponent.form.php?id=${appId}` : null;
+          const label = dfId ? `GLPI Dataflow #${dfId}` : appId ? `GLPI App #${appId}` : null;
+          return { link, label };
+        };
+
+        if (kbView === "grid") {
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12 }}>
+              {filtered.map(entry => {
+                const eCompliant = entry.compliant;
+                const compColor = eCompliant === true ? T.success : eCompliant === false ? T.danger : T.textDim;
+                const compLabel = eCompliant === true ? "✅ Compliant" : eCompliant === false ? "❌ Non-compliant" : null;
+                const accentBorder = hasInd(entry) ? compColor + "90" : (CAT_COLORS[entry.category] || T.accent) + "60";
+                const { link, label } = glpiLink(entry);
+                return (
+                  <Card key={entry.id} hoverable
+                    style={{ padding: "12px 14px", borderTop: `3px solid ${accentBorder}`, display: "flex", flexDirection: "column", gap: 7 }}
+                    onClick={() => setDetailEntry(entry)}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
+                      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+                        <Badge label={entry.category} color={CAT_COLORS[entry.category] || T.accent} />
+                        {hasInd(entry) && compLabel && (
+                          <span style={{ ...chipSm, background: `${compColor}20`, color: compColor, border: `1px solid ${compColor}40` }}>{compLabel}</span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                        <button onClick={e => { e.stopPropagation(); deleteEntry(entry.id); }}
+                          style={{ background: "none", border: "none", cursor: "pointer", padding: 3, color: T.textDim, display: "flex" }}
+                          onMouseEnter={e => e.currentTarget.style.color = T.danger}
+                          onMouseLeave={e => e.currentTarget.style.color = T.textDim} title="Delete">
+                          <Icon name="trash" size={12} color="currentColor" />
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: T.text, lineHeight: 1.4, wordBreak: "break-word" }}>{entry.topic}</div>
+                    {link && (
+                      <a href={link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 600, color: T.accent, textDecoration: 'none', padding: '2px 7px', borderRadius: 10, background: T.accentGlow, border: `1px solid ${T.accent}30`, alignSelf: "flex-start" }}>
+                        <Icon name="link2" size={9} color={T.accent} />{label}
+                      </a>
+                    )}
+                    {hasInd(entry) ? (() => {
+                      const { rawSt, stColor, cl, clColor, tc, cc } = renderIndicators(entry);
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                            {rawSt && <span style={{ ...chipSm, background: `${stColor}18`, color: stColor, border: `1px solid ${stColor}40` }}>{rawSt}</span>}
+                            {cl && <span style={{ ...chipSm, background: `${clColor}15`, color: clColor, border: `1px solid ${clColor}35`, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis" }} title={cl}>{cl}</span>}
+                          </div>
+                          <div style={{ display: "flex", gap: 8, fontSize: 10, color: T.textMuted }}>
+                            <span>🎫 <strong style={{ color: T.text }}>{tc}</strong></span>
+                            <span>🔄 <strong style={{ color: T.text }}>{cc}</strong></span>
+                          </div>
+                        </div>
+                      );
+                    })() : (
+                      <div style={{ fontSize: 11, color: T.textMuted, lineHeight: 1.6 }}>
+                        {(entry.content || "").substring(0, 100)}{(entry.content?.length ?? 0) > 100 ? "…" : ""}
+                      </div>
+                    )}
+                    {entry.tags?.length > 0 && (
+                      <div style={{ marginTop: "auto", paddingTop: 4, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                        {entry.tags.map(t => <span key={t} style={{ fontSize: 9, background: T.border, color: T.textMuted, borderRadius: 4, padding: "1px 5px" }}>{t}</span>)}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          );
+        }
+
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {filtered.map(entry => {
               const eCompliant = entry.compliant;
               const compColor = eCompliant === true ? T.success : eCompliant === false ? T.danger : T.textDim;
               const compLabel = eCompliant === true ? "✅ Compliant" : eCompliant === false ? "❌ Non-compliant" : null;
-              const kbGlpiUrl = (() => { try { return JSON.parse(localStorage.getItem('aria_config') || '{}').glpiUrl || ''; } catch { return ''; } })();
-              const dfId = entry.dataflowId ||
-                (entry.tags || []).find(t => t.startsWith('dataflow-'))?.replace('dataflow-', '') ||
-                (entry.category === 'dataflow' ? entry.glpiId : null);
-              const appId = entry.category !== 'dataflow' ? entry.glpiId : null;
-              const kbGlpiLink = kbGlpiUrl && dfId
-                ? `${kbGlpiUrl}/marketplace/dataflows/front/dataflow.form.php?id=${dfId}`
-                : kbGlpiUrl && appId
-                ? `${kbGlpiUrl}/marketplace/archisw/front/swcomponent.form.php?id=${appId}`
-                : null;
-              const kbGlpiLabel = dfId ? `GLPI Dataflow #${dfId}` : appId ? `GLPI App #${appId}` : null;
+              const { link, label: kbGlpiLabel } = glpiLink(entry);
               return (
                 <Card key={entry.id} hoverable
-                  style={{ padding: "14px 18px", borderLeft: `3px solid ${(entry.category === "dataflow" || entry.category === "application") ? compColor + "60" : (CAT_COLORS[entry.category] || T.accent) + "40"}` }}
+                  style={{ padding: "14px 18px", borderLeft: `3px solid ${hasInd(entry) ? compColor + "60" : (CAT_COLORS[entry.category] || T.accent) + "40"}` }}
                   onClick={() => setDetailEntry(entry)}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
                         <Badge label={entry.category} color={CAT_COLORS[entry.category] || T.accent} />
-                        {(entry.category === "dataflow" || entry.category === "application") && compLabel && (
+                        {hasInd(entry) && compLabel && (
                           <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: `${compColor}20`, color: compColor, border: `1px solid ${compColor}40` }}>{compLabel}</span>
                         )}
                         {entry.source && <Badge label={entry.source} color={T.textDim} />}
                         <span style={{ fontSize: 12, fontWeight: 600, color: T.text }}>{entry.topic}</span>
-                        {kbGlpiLink && (
-                          <a href={kbGlpiLink} target="_blank" rel="noreferrer"
-                            onClick={e => e.stopPropagation()}
+                        {link && (
+                          <a href={link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
                             style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 600, color: T.accent, textDecoration: 'none', padding: '2px 8px', borderRadius: 10, background: T.accentGlow, border: `1px solid ${T.accent}30` }}>
-                            <Icon name="link2" size={10} color={T.accent} />
-                            {kbGlpiLabel}
+                            <Icon name="link2" size={10} color={T.accent} />{kbGlpiLabel}
                           </a>
                         )}
                       </div>
-                      {(entry.category === "dataflow" || entry.category === "application") ? (() => {
-                        const rawSt = entry.dfStatus || '';
-                        const st = rawSt.toUpperCase();
-                        const stColor = st.includes('ACTIV') || st === 'IN USE' || st.includes(' USE') ? T.success
-                          : st.includes('DEVEL') ? T.warning
-                          : st.includes('REMOV') || st.includes('STOP') || st.includes('TO BE') ? T.danger
-                          : T.textDim;
-                        const cl = entry.dfGdpr || '';
-                        const clLower = cl.toLowerCase();
-                        const clColor = cl.includes('🔴') || clLower.includes('confidential') ? '#ef4444'
-                          : cl.includes('🟡') || clLower.includes('internal') ? '#f59e0b'
-                          : cl.includes('🟢') || clLower.includes('public') ? T.success
-                          : T.textDim;
-                        const tc = entry.ticketCount ?? '—';
-                        const cc = entry.changeCount ?? '—';
-                        const chipBase = { fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap' };
+                      {hasInd(entry) ? (() => {
+                        const { rawSt, stColor, cl, clColor, tc, cc } = renderIndicators(entry);
                         return (
                           <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 5 }}>
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              {rawSt && <span style={{ ...chipBase, background: `${stColor}20`, color: stColor, border: `1px solid ${stColor}40` }}>{rawSt}</span>}
-                              {cl && <span style={{ ...chipBase, background: `${clColor}20`, color: clColor, border: `1px solid ${clColor}40` }}>{cl}</span>}
+                              {rawSt && <span style={{ ...chipSm, background: `${stColor}20`, color: stColor, border: `1px solid ${stColor}40` }}>{rawSt}</span>}
+                              {cl && <span style={{ ...chipSm, background: `${clColor}20`, color: clColor, border: `1px solid ${clColor}40` }}>{cl}</span>}
                             </div>
                             <div style={{ display: 'flex', gap: 8, fontSize: 11, color: T.textMuted }}>
                               <span>🎫 <strong style={{ color: T.text }}>{tc}</strong> tickets</span>
@@ -872,9 +955,7 @@ const KnowledgeBase = ({ api }) => {
                       )}
                       {entry.tags?.length > 0 && (
                         <div style={{ marginTop: 8, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                          {entry.tags.map(t => (
-                            <span key={t} style={{ fontSize: 10, background: T.border, color: T.textMuted, borderRadius: 4, padding: "2px 7px" }}>{t}</span>
-                          ))}
+                          {entry.tags.map(t => <span key={t} style={{ fontSize: 10, background: T.border, color: T.textMuted, borderRadius: 4, padding: "2px 7px" }}>{t}</span>)}
                         </div>
                       )}
                     </div>
@@ -883,8 +964,7 @@ const KnowledgeBase = ({ api }) => {
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={e => { e.stopPropagation(); deleteEntry(entry.id); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: T.textDim, display: "flex" }}
                           onMouseEnter={e => e.currentTarget.style.color = T.danger}
-                          onMouseLeave={e => e.currentTarget.style.color = T.textDim}
-                          title="Delete">
+                          onMouseLeave={e => e.currentTarget.style.color = T.textDim} title="Delete">
                           <Icon name="trash" size={14} color="currentColor" />
                         </button>
                       </div>
@@ -892,9 +972,10 @@ const KnowledgeBase = ({ api }) => {
                   </div>
                 </Card>
               );
-          })}
-        </div>
-      )}
+            })}
+          </div>
+        );
+      })()}
 
       {/* Detail Panel */}
       {detailEntry && (
