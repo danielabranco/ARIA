@@ -29,10 +29,9 @@ router.get('/', async (req, res) => {
       `, { id: String(appId) });
     } else {
       result = await s.run(`
-        MATCH (n) WHERE (n:Application OR n:Dataflow) AND n.glpiId IS NOT NULL AND n.glpiId <> ''
+        MATCH (n) WHERE n:Application OR (n:Dataflow AND n.glpiId IS NOT NULL AND n.glpiId <> '')
         OPTIONAL MATCH (n)-[r]->(m)
-          WHERE (m:Application OR m:Dataflow)
-            AND m.glpiId IS NOT NULL AND m.glpiId <> ''
+          WHERE (m:Application OR (m:Dataflow AND m.glpiId IS NOT NULL AND m.glpiId <> ''))
             AND type(r) IN ['FEEDS_INTO','CONNECTS_TO']
         RETURN n, r, m LIMIT 600
       `);

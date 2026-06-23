@@ -1301,10 +1301,14 @@ async function runDataflows(ctx) {
     const dfProtocol   = String(item.plugin_dataflows_transferprotocols_id || '');
     const dfFlowGroup  = String(item.plugin_dataflows_flowgroups_id || '');
     const dfDesc       = item.shortdescription || '';
-    const src          = resolveApp(item.plugin_dataflows_fromswcomponents_id);
-    const dst          = resolveApp(item.plugin_dataflows_toswcomponents_id);
+    const leafName     = raw => raw.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n))).replace(/&gt;/g, '>').replace(/&amp;/g, '&').split('>').pop().trim();
+    const src          = leafName(resolveApp(item.plugin_dataflows_fromswcomponents_id));
+    const dst          = leafName(resolveApp(item.plugin_dataflows_toswcomponents_id));
     const now          = new Date().toISOString();
     const dfGdpr       = resolveLookup('holiday_action', item.plugin_dataflows_holidayactions_id, ctx);
+    const dfLongDesc   = item.content || '';
+    const dfGroup      = leafName(String(item.groups_id || ''));
+    const dfSupportGroup = leafName(String(item.plugin_dataflows_supportgroups_id || ''));
 
     const _nameOk     = /\[.+?\].*\[.+?\]/.test(dfName);
     const _gdprOk     = !!(dfGdpr && dfGdpr.trim());
@@ -1358,12 +1362,13 @@ async function runDataflows(ctx) {
         '### General',
         '| Field | Value |',
         '|---|---|',
-        row('GLPI ID',        dfId),
-        row('Name',           dfName),
-        row('Status',         dfStatusRaw),
-        row('Flow Group',     dfFlowGroup),
-        row('GDPR Level',     dfGdpr),
-        row('Indicator',      dfIndicator),
+        row('GLPI ID',           dfId),
+        row('Name',              dfName),
+        row('Status',            dfStatusRaw),
+        row('Flow Group',        dfFlowGroup),
+        row('GDPR Level',        dfGdpr),
+        row('Indicator',         dfIndicator),
+        row('Long Description',  dfLongDesc),
         dateMod ? `| Last Modified | ${dateMod} |` : '',
         `| Last Synced | ${now.split('T')[0]} |`,
         '',
@@ -1387,14 +1392,14 @@ async function runDataflows(ctx) {
         row('Trigger',          String(item.plugin_dataflows_triggertypes_id       || '')),
         row('Frequency',        String(item.plugin_dataflows_transferfreqs_id      || '')),
         row('Error Handling',   String(item.plugin_dataflows_errorhandlings_id     || '')),
-        row('Source Connector', String(item.plugin_dataflows_sourceconnectors_id   || '')),
+        row('Priority',         String(item.plugin_dataflows_sourceconnectors_id   || '')),
         '',
         '### Ownership',
         '| Field | Value |',
         '|---|---|',
         row('Owner',         String(item.users_id  || '')),
-        row('Group',         String(item.groups_id || '')),
-        row('Support Group', String(item.plugin_dataflows_supportgroups_id || '')),
+        row('Group',         dfGroup),
+        row('Support Group', dfSupportGroup),
         '',
         '### Documentation',
         '| Field | Value |',
@@ -1425,15 +1430,16 @@ async function runDataflows(ctx) {
              id: $id, topic: $topic, content: $content,
              category: 'dataflow', source: 'glpi-sync',
              glpiId: $glpiId, compliant: $compliant,
+             dfStatus: $dfStatus, dfGdpr: $dfGdpr,
              tags: ['dataflow','glpi'], createdAt: $now
            })`,
-          { id: uuid(), topic: dfTopic, content: dfContent, glpiId: dfId, compliant: dfCompliant, now }
+          { id: uuid(), topic: dfTopic, content: dfContent, glpiId: dfId, compliant: dfCompliant, dfStatus: dfStatusRaw, dfGdpr: dfGdpr, now }
         );
       } else {
         for (const rec of kRes.records) {
           await s.run(
-            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.compliant = $compliant, k.reviewStatus = null, k.glpiSyncedAt = $now`,
-            { id: rec.get('id'), topic: dfTopic, content: dfContent, compliant: dfCompliant, now }
+            `MATCH (k:Knowledge) WHERE k.id = $id SET k.topic = $topic, k.content = $content, k.compliant = $compliant, k.dfStatus = $dfStatus, k.dfGdpr = $dfGdpr, k.reviewStatus = null, k.glpiSyncedAt = $now`,
+            { id: rec.get('id'), topic: dfTopic, content: dfContent, compliant: dfCompliant, dfStatus: dfStatusRaw, dfGdpr: dfGdpr, now }
           );
         }
       }
@@ -1699,8 +1705,8 @@ async function runDataflowCompliance(ctx) {
       if (compIdx !== -1) content = content.substring(0, compIdx);
       content = content + section;
       await s.run(
-        `MATCH (k:Knowledge) WHERE k.id = $kid SET k.content = $content, k.reviewStatus = null, k.compliant = $compliant`,
-        { kid, content, compliant }
+        `MATCH (k:Knowledge) WHERE k.id = $kid SET k.content = $content, k.reviewStatus = null, k.compliant = $compliant, k.dfStatus = $dfStatus, k.dfGdpr = $dfGdpr`,
+        { kid, content, compliant, dfStatus: rec.get('status') || '', dfGdpr: gdpr }
       );
     }
 
