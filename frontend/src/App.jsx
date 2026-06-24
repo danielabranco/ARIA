@@ -473,9 +473,11 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
       setLoadingGlpi(true);
       api.get(`/api/pipeline/app/${appId}/linked`)
         .then(d => setGlpiData({
-          tickets:   d.tickets   || [],
-          changes:   d.changes   || [],
-          dataflows: d.dataflows || [],
+          tickets:         d.tickets         || [],
+          changes:         d.changes         || [],
+          dataflows:       d.dataflows       || [],
+          associatedItems: d.associatedItems || [],
+          users:           d.users           || [],
         }))
         .catch(e => setGlpiError(e.message))
         .finally(() => setLoadingGlpi(false));
@@ -530,6 +532,13 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
         'Peripheral':               'front/peripheral.form.php',
         'Phone':                    'front/phone.form.php',
         'Printer':                  'front/printer.form.php',
+        'User':                     'front/user.form.php',
+        'Group':                    'front/group.form.php',
+        'Contract':                 'front/contract.form.php',
+        'Software':                 'front/software.form.php',
+        'Database':                 'front/database.form.php',
+        'Appliance':                'front/appliance.form.php',
+        'Project':                  'front/project.form.php',
       };
       const frontPath = item.itemtype ? ASSOC_URLS[item.itemtype] : null;
       const link = (glpiUrl && frontPath && item.id) ? `${glpiUrl}/${frontPath}?id=${item.id}` : null;
@@ -543,6 +552,9 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
               {badge && <Badge label={badge} color={T.accent} />}
               {item.entities_id && <span style={{ fontSize: 10, color: T.textDim }}>{item.entities_id}</span>}
             </div>
+            {item.role && (
+              <div style={{ marginTop: 3, fontSize: 11, color: T.textDim, fontStyle: "italic" }}>{item.role}</div>
+            )}
             {(item.shortdescription || item.description) && (
               <div style={{ marginTop: 5, fontSize: 11, color: T.textMuted, lineHeight: 1.5 }}>
                 {(item.shortdescription || item.description).substring(0, 180)}
@@ -603,9 +615,11 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
     { id: "problems", label: "Problems",          icon: "warning",  type: "problem", data: glpiData?.problems       },
     { id: "assoc",    label: "Associated Items",  icon: "monitor",  type: "assoc",   data: glpiData?.associatedItems },
   ] : [
-    { id: "tickets",   label: "Tickets",   icon: "ticket",   type: "ticket",    data: glpiData?.tickets   },
-    { id: "changes",   label: "Changes",   icon: "refresh",  type: "change",    data: glpiData?.changes   },
-    { id: "dataflows", label: "Dataflows", icon: "network",  type: "dataflow",  data: glpiData?.dataflows },
+    { id: "tickets",   label: "Tickets",          icon: "ticket",   type: "ticket",    data: glpiData?.tickets          },
+    { id: "changes",   label: "Changes",           icon: "refresh",  type: "change",    data: glpiData?.changes          },
+    { id: "dataflows", label: "Dataflows",         icon: "network",  type: "dataflow",  data: glpiData?.dataflows        },
+    { id: "assoc",     label: "Associated Items",  icon: "monitor",  type: "assoc",     data: glpiData?.associatedItems  },
+    { id: "users",     label: "Users",             icon: "user",     type: "assoc",     data: glpiData?.users            },
   ];
 
   return (

@@ -2178,36 +2178,63 @@ router.get('/app/:id/linked', async (req, res) => {
     let tickets = tRes.records.map(r => r.get('t'));
     let changes = cRes.records.map(r => r.get('c'));
 
-    // On-demand enrichment for stubs (no name) — same pattern as /dataflow/:id/linked
     const stubTickets = tickets.filter(t => !t.name);
     const stubChanges = changes.filter(c => !c.name);
-    if (stubTickets.length > 0 || stubChanges.length > 0) {
-      const { getConfig } = require('../lib/scheduler');
-      const cfg = await getConfig();
-      if (cfg && cfg.glpiUrl) {
-        const base  = cfg.glpiUrl.replace(/\/$/, '');
-        const agent = base.startsWith('https') ? httpsAgent : undefined;
+    let associatedItems = [];
+    let users = [];
+
+    // Init GLPI session: fetch associated items (all itemtypes) + enrich stubs in one session
+    const { getConfig } = require('../lib/scheduler');
+    const cfg = await getConfig();
+    if (cfg && cfg.glpiUrl) {
+      const base  = cfg.glpiUrl.replace(/\/$/, '');
+      const agent = base.startsWith('https') ? httpsAgent : undefined;
+      enforceGetOnly('GET');
+      const sessRes  = await fetch(`${base}/apirest.php/initSession`, { method: 'GET', headers: { 'Authorization': `user_token ${cfg.glpiUserToken}`, 'App-Token': cfg.glpiAppToken }, agent });
+      if (sessRes.ok) {
+        const { session_token: token } = await sessRes.json();
+        const hdrs = { 'Session-Token': token, 'App-Token': cfg.glpiAppToken, 'Content-Type': 'application/json' };
+
+        // Fetch ALL PluginArchiswSwcomponent_Item rows with expand; filter client-side to avoid LIKE-match issues.
+        // First PluginArchiswSwcomponent link in each row points to the source app.
         enforceGetOnly('GET');
-        const sessRes  = await fetch(`${base}/apirest.php/initSession`, { method: 'GET', headers: { 'Authorization': `user_token ${cfg.glpiUserToken}`, 'App-Token': cfg.glpiAppToken }, agent });
-        const sessData = await sessRes.json();
-        if (sessData.session_token) {
-          const token = sessData.session_token;
-          for (const t of stubTickets) {
-            const item = await glpiFetch(base, `Ticket/${t.glpiId}`, token, cfg.glpiAppToken);
-            if (!item || item.error || !item.id) continue;
-            await s.run(`MERGE (t:Ticket { glpiId: $id }) SET t.name = $name, t.status = $status, t.priority = $priority, t.date = $date, t.dateMod = $dateMod, t.updatedAt = $now`,
-              { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), priority: String(item.priority ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() });
-            t.name = item.name || ''; t.status = String(item.status ?? ''); t.priority = String(item.priority ?? '');
+        const aiRes = await fetch(`${base}/apirest.php/PluginArchiswSwcomponent_Item?range=0-999&expand_dropdowns=true`, {
+          method: 'GET', headers: hdrs, agent,
+        }).catch(() => null);
+        if (aiRes && aiRes.ok) {
+          const allItems = await aiRes.json().then(b => Array.isArray(b) ? b : []).catch(() => []);
+          for (const item of allItems) {
+            const appLink = (item.links || []).find(l => l.rel === 'PluginArchiswSwcomponent');
+            if (appLink?.href?.match(/\/(\d+)$/)?.[1] !== id) continue;
+            const role = item.plugin_archisw_swcomponents_itemroles_id || '';
+            const name = String(item.items_id || '');
+            // PluginArchiswSwcomponent rows have two links with rel=PluginArchiswSwcomponent;
+            // the second one points to the linked app (the first is the source app).
+            const linkedGlpiId = item.itemtype === 'PluginArchiswSwcomponent'
+              ? (item.links || []).filter(l => l.rel === 'PluginArchiswSwcomponent')[1]?.href?.match(/\/(\d+)$/)?.[1] || null
+              : (item.links || []).find(l => l.rel === item.itemtype)?.href?.match(/\/(\d+)$/)?.[1] || null;
+            const mapped = { id: linkedGlpiId, name, itemtype: item.itemtype, role };
+            if (item.itemtype === 'User') users.push(mapped);
+            else associatedItems.push(mapped);
           }
-          for (const c of stubChanges) {
-            const item = await glpiFetch(base, `Change/${c.glpiId}`, token, cfg.glpiAppToken);
-            if (!item || item.error || !item.id) continue;
-            await s.run(`MERGE (c:Change { glpiId: $id }) SET c.name = $name, c.status = $status, c.date = $date, c.dateMod = $dateMod, c.updatedAt = $now`,
-              { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() });
-            c.name = item.name || ''; c.status = String(item.status ?? '');
-          }
-          fetch(`${base}/apirest.php/killSession`, { method: 'GET', headers: glpiHeaders(token, cfg.glpiAppToken), agent }).catch(() => {});
         }
+
+        for (const t of stubTickets) {
+          const item = await glpiFetch(base, `Ticket/${t.glpiId}`, token, cfg.glpiAppToken);
+          if (!item || item.error || !item.id) continue;
+          await s.run(`MERGE (t:Ticket { glpiId: $id }) SET t.name = $name, t.status = $status, t.priority = $priority, t.date = $date, t.dateMod = $dateMod, t.updatedAt = $now`,
+            { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), priority: String(item.priority ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() });
+          t.name = item.name || ''; t.status = String(item.status ?? ''); t.priority = String(item.priority ?? '');
+        }
+        for (const c of stubChanges) {
+          const item = await glpiFetch(base, `Change/${c.glpiId}`, token, cfg.glpiAppToken);
+          if (!item || item.error || !item.id) continue;
+          await s.run(`MERGE (c:Change { glpiId: $id }) SET c.name = $name, c.status = $status, c.date = $date, c.dateMod = $dateMod, c.updatedAt = $now`,
+            { id: String(item.id), name: item.name || '', status: String(item.status ?? ''), date: item.date || '', dateMod: item.date_mod || '', now: new Date().toISOString() });
+          c.name = item.name || ''; c.status = String(item.status ?? '');
+        }
+
+        fetch(`${base}/apirest.php/killSession`, { method: 'GET', headers: glpiHeaders(token, cfg.glpiAppToken), agent }).catch(() => {});
       }
     }
 
@@ -2218,7 +2245,7 @@ router.get('/app/:id/linked', async (req, res) => {
       return { id: d.glpiId, name: d.name, desc: d.desc || d.description || '', status: d.status };
     });
 
-    res.json({ tickets: tickets.map(mapTicket), changes: changes.map(mapChange), dataflows });
+    res.json({ tickets: tickets.map(mapTicket), changes: changes.map(mapChange), dataflows, associatedItems, users });
   } catch (e) { res.status(500).json({ error: e.message }); }
   finally { await s.close(); }
 });
