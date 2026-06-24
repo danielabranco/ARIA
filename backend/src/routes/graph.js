@@ -43,7 +43,7 @@ router.get('/', async (req, res) => {
           WHERE ((m:Application AND coalesce(m.source, 'glpi') <> 'training')
               OR (m:Dataflow AND m.glpiId IS NOT NULL AND m.glpiId <> ''))
             AND type(r) IN ['FEEDS_INTO','CONNECTS_TO']
-        RETURN n, r, m LIMIT 600
+        RETURN n, r, m LIMIT 5000
       `);
     }
 
