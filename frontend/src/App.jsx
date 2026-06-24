@@ -517,17 +517,30 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
       );
     }
 
-    // Associated items (software components) have different fields
+    // Associated items — any GLPI itemtype
     if (type === "assoc") {
-      const link = glpiUrl ? `${glpiUrl}/marketplace/archisw/front/swcomponent.form.php?id=${item.id}` : null;
-      const appType = item.plugin_archisw_swcomponenttypes_id || item.swcomponenttypes_id || "";
+      const ASSOC_URLS = {
+        'PluginArchiswSwcomponent': 'marketplace/archisw/front/swcomponent.form.php',
+        'Certificate':              'front/certificate.form.php',
+        'Computer':                 'front/computer.form.php',
+        'Software':                 'front/software.form.php',
+        'SoftwareVersion':          'front/softwareversion.form.php',
+        'NetworkEquipment':         'front/networkequipment.form.php',
+        'Monitor':                  'front/monitor.form.php',
+        'Peripheral':               'front/peripheral.form.php',
+        'Phone':                    'front/phone.form.php',
+        'Printer':                  'front/printer.form.php',
+      };
+      const frontPath = item.itemtype ? ASSOC_URLS[item.itemtype] : null;
+      const link = (glpiUrl && frontPath && item.id) ? `${glpiUrl}/${frontPath}?id=${item.id}` : null;
+      const badge = item.plugin_archisw_swcomponenttypes_id || item.swcomponenttypes_id || item.itemtype || "";
       return (
         <div style={{ padding: "12px 16px", borderRadius: T.radiusSm, background: T.bgElevated, border: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 10, color: T.textDim, fontWeight: 600 }}>#{item.id}</span>
-              <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{item.name || `App #${item.id}`}</span>
-              {appType && <Badge label={appType} color={T.accent} />}
+              {item.id && <span style={{ fontSize: 10, color: T.textDim, fontWeight: 600 }}>#{item.id}</span>}
+              <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{item.name || `${item.itemtype || 'Item'} #${item.id}`}</span>
+              {badge && <Badge label={badge} color={T.accent} />}
               {item.entities_id && <span style={{ fontSize: 10, color: T.textDim }}>{item.entities_id}</span>}
             </div>
             {(item.shortdescription || item.description) && (
