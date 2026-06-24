@@ -297,8 +297,13 @@ function renderContent(doc, content, startY, title) {
       i++; continue;
     }
 
-    // H3
+    // H3 — skip the entire Compliance section
     if (/^### /.test(line)) {
+      if (/^### compliance$/i.test(line.trim())) {
+        i++;
+        while (i < lines.length && !/^#{1,3} /.test(lines[i])) i++;
+        continue;
+      }
       checkPage(12);
       y += 4;
       doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...ACCENT);
