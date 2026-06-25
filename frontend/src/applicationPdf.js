@@ -437,14 +437,13 @@ export function generateApplicationPDF(entry, glpiData) {
   <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('07', '<strong style="color:#B23A2E;">Restricted ·</strong> Architecture detail for IT &amp; Security only.')}
     <div style="flex:1;">
-      ${h2('Ownership &amp; Compliance')}
+      ${h2('Ownership')}
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0 28px;">
         ${kv('Owner group',       owner)}
         ${kv('Supplier',          supplier)}
         ${kv('GDPR / Data class', gdpr, classColor)}
         ${kv('Type',              appType)}
         ${kv('SLA',               sla)}
-        ${entry.compliant === true ? kv('Compliance', '✅ Compliant', '#3E7C5A') : entry.compliant === false ? kv('Compliance', '❌ Non-compliant', '#B23A2E') : ''}
       </div>
       ${users.length ? `
       <div style="margin-top:14px;">
@@ -460,20 +459,59 @@ export function generateApplicationPDF(entry, glpiData) {
     </div>
   </div>
 
-  <!-- 08 Record & Sync History -->
+  <!-- 08 Versioning & History -->
   <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('08', `Synced from ARIA / GLPI #${esc(glpiId)}.`)}
     <div style="flex:1;">
-      ${h2('Record &amp; Sync History')}
-      <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+      ${h2('Versioning &amp; History')}
+
+      <!-- Version record -->
+      <div style="font-size:10px;letter-spacing:.08em;color:#777;font-weight:600;margin-bottom:8px;">VERSION RECORD</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:22px;">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px 6px 0;border-bottom:2px solid #1A1A1A;font-size:9.5px;letter-spacing:.06em;color:#777;font-weight:600;width:30%;">FIELD</th>
+          <th style="text-align:left;padding:6px 0 6px 8px;border-bottom:2px solid #1A1A1A;font-size:9.5px;letter-spacing:.06em;color:#777;font-weight:600;">VALUE</th>
+        </tr></thead>
         <tbody style="font-weight:300;">
-          <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;width:42%;">ARIA ID</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;font-family:'IBM Plex Mono',monospace;">${esc(glpiId)}</td></tr>
+          <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">ARIA ID</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;font-family:'IBM Plex Mono',monospace;color:#0084B2;">#${esc(glpiId)}</td></tr>
+          <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">Current version</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;font-weight:500;">${esc(version)}</td></tr>
+          <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">In use since</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;">${esc(inUseSince || '—')}</td></tr>
+          <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">Status</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;font-weight:500;color:${statusColor};">${esc(status || '—')}</td></tr>
           <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">Status since</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;">${esc(general['Status Since'] || '—')}</td></tr>
           <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">Last modified</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;">${esc(dateMod || '—')}</td></tr>
           <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">Last synced</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;">${esc(lastSync || '—')}</td></tr>
           <tr><td style="padding:8px 8px 8px 0;color:#777;">Document generated</td><td style="padding:8px 0 8px 8px;">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td></tr>
         </tbody>
       </table>
+
+      <!-- Change history from tickets + changes -->
+      ${(() => {
+        const tickets = (glpiData && glpiData.tickets) || [];
+        const changes  = (glpiData && glpiData.changes)  || [];
+        const rows = [
+          ...changes.map(c => ({ type: 'Change',  id: c.id, name: c.name, status: c.status })),
+          ...tickets.map(t => ({ type: 'Ticket',  id: t.id, name: t.name, status: t.status })),
+        ];
+        if (!rows.length) return `<div style="font-size:12.5px;color:#777;font-weight:300;font-style:italic;">No tickets or changes linked in ARIA.</div>`;
+        const typeColor = t => t === 'Change' ? '#C28A1E' : '#0084B2';
+        const rHtml = rows.map(r => `<tr>
+          <td style="padding:7px 8px 7px 0;border-bottom:1px solid #EDF0F2;"><span style="font-size:9.5px;font-weight:600;padding:2px 7px;border-radius:9px;background:${typeColor(r.type)}20;color:${typeColor(r.type)};">${r.type}</span></td>
+          <td style="padding:7px 8px;border-bottom:1px solid #EDF0F2;font-family:'IBM Plex Mono',monospace;color:#0084B2;font-size:11px;">#${esc(r.id)}</td>
+          <td style="padding:7px 8px;border-bottom:1px solid #EDF0F2;font-weight:300;">${esc(r.name || '—')}</td>
+          <td style="padding:7px 0 7px 8px;border-bottom:1px solid #EDF0F2;color:#5A6066;font-size:11.5px;">${esc(r.status || '—')}</td>
+        </tr>`).join('');
+        return `
+        <div style="font-size:10px;letter-spacing:.08em;color:#777;font-weight:600;margin-bottom:8px;">CHANGE HISTORY</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead><tr>
+            <th style="text-align:left;padding:6px 8px 6px 0;border-bottom:2px solid #1A1A1A;font-size:9.5px;letter-spacing:.06em;color:#777;font-weight:600;">TYPE</th>
+            <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #1A1A1A;font-size:9.5px;letter-spacing:.06em;color:#777;font-weight:600;">ID</th>
+            <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #1A1A1A;font-size:9.5px;letter-spacing:.06em;color:#777;font-weight:600;">TITLE</th>
+            <th style="text-align:left;padding:6px 0 6px 8px;border-bottom:2px solid #1A1A1A;font-size:9.5px;letter-spacing:.06em;color:#777;font-weight:600;">STATUS</th>
+          </tr></thead>
+          <tbody style="font-weight:300;">${rHtml}</tbody>
+        </table>`;
+      })()}
     </div>
   </div>
 
