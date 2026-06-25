@@ -64,8 +64,23 @@ app.get('/api/stats/compliance', auth, async (req, res) => {
         }));
       } finally { await s.close(); }
     };
+    // ── per-field compliance (single-row aggregate queries) ───────────────
+    const fieldBreakdown = async (cypher, fieldDefs) => {
+      const s = driver.session();
+      try {
+        const r = await s.run(cypher);
+        if (!r.records.length) return [];
+        const row   = r.records[0];
+        const total = row.get('total').toNumber();
+        return fieldDefs
+          .map(([label, key]) => ({ field: label, total, compliant: row.get(key).toNumber() }))
+          .sort((a, b) => a.compliant - b.compliant); // worst first
+      } finally { await s.close(); }
+    };
+
     const [dfByStatus, dfByGroup, dfByProtocol, dfByComplexity,
-           appByType, appByEntity, appByStatus] = await Promise.all([
+           appByType, appByEntity, appByStatus,
+           dfByField, appByField] = await Promise.all([
       breakdown(`MATCH (d:Dataflow) WHERE d.status IS NOT NULL AND d.status <> ''
         RETURN d.status AS field, count(d) AS total, sum(CASE WHEN d.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
       breakdown(`MATCH (d:Dataflow) WHERE d.flowGroup IS NOT NULL AND d.flowGroup <> ''
@@ -80,10 +95,36 @@ app.get('/api/stats/compliance', auth, async (req, res) => {
         RETURN a.entity AS field, count(a) AS total, sum(CASE WHEN a.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
       breakdown(`MATCH (a:Application) WHERE a.glpiId IS NOT NULL AND a.status IS NOT NULL AND a.status <> ''
         RETURN a.status AS field, count(a) AS total, sum(CASE WHEN a.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
+
+      // Dataflow: per-criterion compliance across all dataflows
+      fieldBreakdown(`
+        MATCH (d:Dataflow) WHERE d.compliant IS NOT NULL
+        RETURN count(d) AS total,
+          sum(CASE WHEN d.name =~ '.*\\\\[.+\\\\].*\\\\[.+\\\\].*' THEN 1 ELSE 0 END) AS nameOk,
+          sum(CASE WHEN d.dataClassification IS NOT NULL AND d.dataClassification <> '' THEN 1 ELSE 0 END) AS gdprOk,
+          sum(CASE WHEN d.sourceApp IS NOT NULL AND d.sourceApp <> '' AND d.destApp IS NOT NULL AND d.destApp <> '' THEN 1 ELSE 0 END) AS appsOk,
+          sum(CASE WHEN d.protocol IS NOT NULL AND d.protocol <> '' THEN 1 ELSE 0 END) AS protOk`,
+        [['Name format [SOURCE]-[DEST]', 'nameOk'], ['GDPR Label', 'gdprOk'],
+         ['From/To Application', 'appsOk'], ['Protocol', 'protOk']]),
+
+      // Application: per-criterion compliance across all apps
+      fieldBreakdown(`
+        MATCH (a:Application) WHERE a.glpiId IS NOT NULL AND a.compliant IS NOT NULL
+        RETURN count(a) AS total,
+          sum(CASE WHEN a.status IS NOT NULL AND a.status <> '' THEN 1 ELSE 0 END) AS statusOk,
+          sum(CASE WHEN a.type IS NOT NULL AND a.type <> '' THEN 1 ELSE 0 END) AS typeOk,
+          sum(CASE WHEN a.targets IS NOT NULL AND a.targets <> '' THEN 1 ELSE 0 END) AS targetsOk,
+          sum(CASE WHEN a.dataClassification IS NOT NULL AND a.dataClassification <> '' THEN 1 ELSE 0 END) AS dataClOk,
+          sum(CASE WHEN a.supplier IS NOT NULL AND a.supplier <> '' THEN 1 ELSE 0 END) AS supplOk,
+          sum(CASE WHEN a.sla IS NOT NULL AND a.sla <> '' THEN 1 ELSE 0 END) AS slaOk,
+          sum(CASE WHEN a.owner IS NOT NULL AND a.owner <> '' THEN 1 ELSE 0 END) AS ownerOk`,
+        [['Status', 'statusOk'], ['Type', 'typeOk'], ['McFarlan Matrix', 'targetsOk'],
+         ['Security Classification', 'dataClOk'], ['Supplier', 'supplOk'],
+         ['Service Level (SLA)', 'slaOk'], ['Component Owner', 'ownerOk']]),
     ]);
     res.json({
-      dataflows:    { byStatus: dfByStatus, byFlowGroup: dfByGroup, byProtocol: dfByProtocol, byComplexity: dfByComplexity },
-      applications: { byType: appByType, byEntity: appByEntity, byStatus: appByStatus },
+      dataflows:    { byField: dfByField, byStatus: dfByStatus, byFlowGroup: dfByGroup, byProtocol: dfByProtocol, byComplexity: dfByComplexity },
+      applications: { byField: appByField, byType: appByType, byEntity: appByEntity, byStatus: appByStatus },
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

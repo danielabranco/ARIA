@@ -529,6 +529,7 @@ const Dashboard = ({ api, setPage }) => {
               stats={stats.compliance.dataflows}
               breakdown={compliance?.dataflows}
               fieldSections={[
+                { key: "byField",     label: "By Criterion" },
                 { key: "byStatus",    label: "By Status" },
                 { key: "byFlowGroup", label: "By Flow Group" },
                 { key: "byProtocol",  label: "By Protocol" },
@@ -542,6 +543,7 @@ const Dashboard = ({ api, setPage }) => {
               stats={stats.compliance.applications}
               breakdown={compliance?.applications}
               fieldSections={[
+                { key: "byField",  label: "By Criterion" },
                 { key: "byType",   label: "By Type" },
                 { key: "byEntity", label: "By Entity" },
                 { key: "byStatus", label: "By Status" },
@@ -3026,9 +3028,9 @@ const AccessReview = ({ api }) => {
   const ACCESS_KW = ['access', 'accès', 'account', 'compte', 'user', 'utilisateur', 'permission', 'rights', 'droits', 'credential', 'password', 'mot de passe', 'login', 'connexion', 'role', 'profil', 'profile', 'authoriz', 'autoris', 'privilege', 'habilitation', 'identif'];
 
   const loadLinked = async (glpiId) => {
-    if (expandedId === glpiId) { setExpandedId(null); return; }
+    if (expandedId === glpiId && !linkedCache[glpiId]?.error) { setExpandedId(null); return; }
     setExpandedId(glpiId);
-    if (linkedCache[glpiId]) return;
+    if (linkedCache[glpiId] && !linkedCache[glpiId].error) return;
     setLoadingLinked(glpiId);
     try {
       const d = await api.get(`/api/pipeline/app/${encodeURIComponent(glpiId)}/linked`);
@@ -3179,10 +3181,10 @@ const AccessReview = ({ api }) => {
                           <span>SLA: <span style={{ color: T.text }}>{decodeHtml(app.sla)}</span></span>
                         )}
                         {app.urlProd && (
-                          <span>Prod: <span style={{ color: T.accent }}>{app.urlProd}</span></span>
+                          <span>Prod: <span style={{ color: T.accent }}>{decodeHtml(app.urlProd)}</span></span>
                         )}
                         {app.urlQA && (
-                          <span>QA: <span style={{ color: T.purple }}>{app.urlQA}</span></span>
+                          <span>QA: <span style={{ color: T.purple }}>{decodeHtml(app.urlQA)}</span></span>
                         )}
                       </div>
                       {app.auditNote && !isEditing && (
