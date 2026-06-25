@@ -90,9 +90,99 @@ function kv(label, value, colorVal) {
   return `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #EDF0F2;font-size:12.5px;"><span style="color:#777;font-weight:300;">${label}</span>${v}</div>`;
 }
 
+// ─── revision history builder ────────────────────────────────────────────────
+
+function esc(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function shortVal(s, max) {
+  const str = String(s || '');
+  return str.length > max ? str.substring(0, max) + '…' : str;
+}
+
+function describeChange(l) {
+  const action = l.linked_action;
+  const field  = l.field || '';
+  const oldV   = l.old_value || '';
+  const newV   = l.new_value || '';
+
+  // Item creation: no field, action=0, value contains "Add the Item"
+  if (!field && !action && (newV === 'Add the Item' || oldV === 'Add the Item')) return 'Created';
+
+  // Linked / unlinked sub-item (action > 0)
+  if (action > 0) {
+    const typeLabel = (l.itemtype_link || '')
+      .replace(/Plugin\w+/g, s => s.replace('Plugin', '').replace(/([A-Z])/g, ' $1').trim())
+      .replace(/^Dataflows ?/, '').trim() || '';
+    const name  = newV || oldV;
+    const short = shortVal(name, 50);
+    const isAdd = [1, 12, 21, 23].includes(action);
+    return `${isAdd ? 'Linked' : 'Unlinked'} ${typeLabel}${short ? ': ' + short : ''}`;
+  }
+
+  // Field update
+  if (!field) {
+    const msg = newV || oldV;
+    return msg ? shortVal(msg, 70) : 'Updated';
+  }
+
+  if (!oldV && newV) return `${field}: set to "${shortVal(newV, 30)}"`;
+  if (oldV && !newV) return `${field}: cleared`;
+  if (oldV && newV)  return `${field}: "${shortVal(oldV, 22)}" → "${shortVal(newV, 22)}"`;
+  return `${field} updated`;
+}
+
+function buildRevisionHistory(history) {
+  if (!history || !history.length) {
+    return `
+      <tr>
+        <td style="padding:9px 8px 9px 0;border-bottom:1px solid #EDF0F2;color:#B0B8BD;">—</td>
+        <td style="padding:9px 8px;border-bottom:1px solid #EDF0F2;color:#B0B8BD;">—</td>
+        <td style="padding:9px 8px;border-bottom:1px solid #EDF0F2;color:#B0B8BD;">—</td>
+        <td style="padding:9px 0 9px 8px;border-bottom:1px solid #EDF0F2;color:#B0B8BD;font-style:italic;">History not yet available — open the dataflow panel first to load GLPI log data.</td>
+      </tr>`;
+  }
+
+  // Group by calendar day + user; sort ascending (oldest = v1.0)
+  const groups = {};
+  for (const l of history) {
+    const day  = String(l.date || '').substring(0, 10);
+    const user = l.user || '—';
+    const key  = `${day}__${user}`;
+    if (!groups[key]) groups[key] = { date: day, user, entries: [] };
+    groups[key].entries.push(l);
+  }
+  const sorted = Object.values(groups).sort((a, b) => a.date.localeCompare(b.date));
+
+  const rows = sorted.map((g, i) => {
+    const ver = `${i + 1}.0`;
+    const seen = new Set();
+    const changes = g.entries
+      .map(l => describeChange(l))
+      .filter(s => { if (!s || seen.has(s)) return false; seen.add(s); return true; });
+    const changeHtml = changes.map(c => `<div style="margin-bottom:2px;">${esc(c)}</div>`).join('');
+    return `<tr>
+      <td style="padding:9px 8px 9px 0;border-bottom:1px solid #EDF0F2;"><span style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;color:#0084B2;">${ver}</span></td>
+      <td style="padding:9px 8px;border-bottom:1px solid #EDF0F2;white-space:nowrap;">${esc(fmtDate(g.date))}</td>
+      <td style="padding:9px 8px;border-bottom:1px solid #EDF0F2;white-space:nowrap;">${esc(g.user)}</td>
+      <td style="padding:9px 0 9px 8px;border-bottom:1px solid #EDF0F2;font-size:11.5px;font-weight:300;">${changeHtml}</td>
+    </tr>`;
+  });
+
+  rows.push(`<tr>
+    <td style="padding:9px 8px 9px 0;font-family:'IBM Plex Mono',monospace;color:#B0B8BD;">—</td>
+    <td style="padding:9px 8px;color:#B0B8BD;">—</td>
+    <td style="padding:9px 8px;color:#B0B8BD;">—</td>
+    <td style="padding:9px 0 9px 8px;color:#B0B8BD;font-style:italic;">Next revision…</td>
+  </tr>`);
+
+  return rows.join('');
+}
+
 // ─── main export ─────────────────────────────────────────────────────────────
 
-export async function generateDataflowPDF(entry) {
+export async function generateDataflowPDF(entry, history = []) {
   const content  = entry.content || '';
   const gen      = parseSection(content, 'General');
   const flow     = parseSection(content, 'Flow');
@@ -323,29 +413,16 @@ export async function generateDataflowPDF(entry) {
   )}
 
   ${section('08',
-    `Append a row per change — never overwrite prior entries.`,
+    `Compiled from GLPI history log. One version per day &amp; editor — never overwrite prior entries.`,
     `${h2('Revision History')}
     <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
       <thead><tr>
-        <th style="text-align:left;padding:6px 8px 6px 0;border-bottom:2px solid #1A1A1A;font-size:10px;letter-spacing:.06em;color:#777;font-weight:600;width:64px;">VER</th>
-        <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #1A1A1A;font-size:10px;letter-spacing:.06em;color:#777;font-weight:600;width:110px;">DATE</th>
-        <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #1A1A1A;font-size:10px;letter-spacing:.06em;color:#777;font-weight:600;width:110px;">BY</th>
+        <th style="text-align:left;padding:6px 8px 6px 0;border-bottom:2px solid #1A1A1A;font-size:10px;letter-spacing:.06em;color:#777;font-weight:600;width:52px;">VER</th>
+        <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #1A1A1A;font-size:10px;letter-spacing:.06em;color:#777;font-weight:600;width:100px;">DATE</th>
+        <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #1A1A1A;font-size:10px;letter-spacing:.06em;color:#777;font-weight:600;width:130px;">BY</th>
         <th style="text-align:left;padding:6px 0 6px 8px;border-bottom:2px solid #1A1A1A;font-size:10px;letter-spacing:.06em;color:#777;font-weight:600;">CHANGE</th>
       </tr></thead>
-      <tbody style="font-weight:300;">
-        <tr>
-          <td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;font-family:'IBM Plex Mono',monospace;">1.0</td>
-          <td style="padding:8px;border-bottom:1px solid #EDF0F2;">${fmtDate(lastMod)}</td>
-          <td style="padding:8px;border-bottom:1px solid #EDF0F2;">${owner || '—'}</td>
-          <td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;">Initial dataflow documented in ARIA / GLPI&nbsp;#${glpiId}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px 8px 8px 0;font-family:'IBM Plex Mono',monospace;color:#B0B8BD;">—</td>
-          <td style="padding:8px;color:#B0B8BD;">—</td>
-          <td style="padding:8px;color:#B0B8BD;">—</td>
-          <td style="padding:8px 0 8px 8px;color:#B0B8BD;">Next revision…</td>
-        </tr>
-      </tbody>
+      <tbody style="font-weight:300;">${buildRevisionHistory(history)}</tbody>
     </table>`
   )}
 

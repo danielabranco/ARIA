@@ -1,3 +1,4 @@
+import { renderDivToPdf } from './pdfUtils';
 import logoB64 from './omds_logo_b64';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -92,7 +93,7 @@ function sectionHeader(num, note) {
 
 function h2(title) {
   return `<h2 style="margin:0 0 12px;font-size:19px;font-weight:400;display:flex;align-items:center;gap:9px;">
-    <span style="width:7px;height:7px;background:#0084B2;flex:none;"></span>${title}</h2>`;
+    <span style="width:7px;height:7px;background:#0084B2;flex:none;display:inline-block;"></span>${title}</h2>`;
 }
 
 function kv(label, value, colorVal) {
@@ -106,7 +107,7 @@ function kv(label, value, colorVal) {
 
 function classDot(cls) {
   const c = CLASS_COLORS[cls] || '#0084B2';
-  return `<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:${c};"></span>${esc(cls)}</span>`;
+  return `<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:${c};display:inline-block;"></span>${esc(cls)}</span>`;
 }
 
 // Section 02 — Architecture Diagram
@@ -117,7 +118,6 @@ function buildArchDiagram(associatedItems, glpiId) {
     </div>`;
   }
 
-  // Group items by layer
   const layers = {};
   for (const item of associatedItems) {
     const layerDef = LAYER_MAP[item.itemtype];
@@ -168,11 +168,11 @@ function buildArchDiagram(associatedItems, glpiId) {
   <div style="margin-top:16px;padding-top:13px;border-top:1px solid #E2E7EA;">
     <div style="font-size:9px;letter-spacing:.1em;color:#777;font-weight:600;margin-bottom:9px;">COLOUR-CODING KEY — COMPONENT CLASS</div>
     <div style="display:flex;flex-wrap:wrap;gap:8px 22px;font-size:11px;font-weight:300;">
-      <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#0084B2;border-radius:50%;flex:none;"></span><strong style="font-weight:500;">Application</strong></span>
-      <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#3E7C5A;border-radius:50%;flex:none;"></span><strong style="font-weight:500;">Infrastructure</strong></span>
-      <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#C28A1E;border-radius:50%;flex:none;"></span><strong style="font-weight:500;">Software / Data</strong></span>
-      <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#B23A2E;border-radius:50%;flex:none;"></span><strong style="font-weight:500;">Security / External</strong></span>
-      <span style="display:flex;align-items:center;gap:7px;"><span style="width:16px;height:10px;border:1px dashed #99a2a8;flex:none;"></span>Outside trust boundary</span>
+      <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#0084B2;border-radius:50%;flex:none;display:inline-block;"></span><strong style="font-weight:500;">Application</strong></span>
+      <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#3E7C5A;border-radius:50%;flex:none;display:inline-block;"></span><strong style="font-weight:500;">Infrastructure</strong></span>
+      <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#C28A1E;border-radius:50%;flex:none;display:inline-block;"></span><strong style="font-weight:500;">Software / Data</strong></span>
+      <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#B23A2E;border-radius:50%;flex:none;display:inline-block;"></span><strong style="font-weight:500;">Security / External</strong></span>
+      <span style="display:flex;align-items:center;gap:7px;"><span style="width:16px;height:10px;border:1px dashed #99a2a8;flex:none;display:inline-block;"></span>Outside trust boundary</span>
     </div>
   </div>`;
 }
@@ -194,13 +194,12 @@ function buildInventoryTable(associatedItems) {
       const role = item.role || item.itemtype.replace('Plugin', '').replace(/([A-Z])/g, ' $1').trim();
       const cls = layerDef ? (layerDef.dashed ? 'External' : layerDef.label === 'APPLICATIONS' ? 'Internal' : layerDef.label === 'SECURITY' ? 'Restricted' : 'Internal') : 'Internal';
       const dotColor = CLASS_COLORS[cls] || '#0084B2';
-      const isLast = false;
       return `<tr>
         <td style="padding:7px 8px 7px 0;border-bottom:1px solid #EDF0F2;font-family:'IBM Plex Mono',monospace;color:#0084B2;">${ref}</td>
         <td style="padding:7px 8px;border-bottom:1px solid #EDF0F2;font-weight:500;">${esc(item.name)}</td>
         <td style="padding:7px 8px;border-bottom:1px solid #EDF0F2;color:#5A6066;">${esc(layer.charAt(0) + layer.slice(1).toLowerCase().replace('software / data', 'Software/Data'))}</td>
         <td style="padding:7px 8px;border-bottom:1px solid #EDF0F2;color:#5A6066;">${esc(role)}</td>
-        <td style="padding:7px 0 7px 8px;border-bottom:1px solid #EDF0F2;"><span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:${dotColor};"></span>${esc(cls)}</span></td>
+        <td style="padding:7px 0 7px 8px;border-bottom:1px solid #EDF0F2;"><span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:${dotColor};display:inline-block;"></span>${esc(cls)}</span></td>
       </tr>`;
     }).join('');
 
@@ -247,10 +246,9 @@ function buildDepsTable(dataflows) {
 
 // ─── main export ────────────────────────────────────────────────────────────
 
-export function generateApplicationPDF(entry, glpiData) {
+export async function generateApplicationPDF(entry, glpiData) {
   const content = entry.content || '';
 
-  // Parse markdown sections
   const general      = parseSection(content, 'General');
   const classif      = parseSection(content, 'Classification');
   const ownership    = parseSection(content, 'Ownership');
@@ -287,27 +285,9 @@ export function generateApplicationPDF(entry, glpiData) {
 
   const criticality = appType && appType.toLowerCase().includes('critical') ? 'Tier 1' : '';
 
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  *{box-sizing:border-box;}
-  body{margin:0;background:#e9ecee;}
-  @page{ size:A4; margin:13mm; }
-  @media print{
-    html{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    body{ background:#fff; }
-    .page{ box-shadow:none !important; margin:0 !important; width:auto !important; padding:0 !important; }
-    h2,h1{ break-after:avoid; }
-    table,.keepwhole{ break-inside:avoid; }
-  }
-</style>
-</head>
-<body>
-<div class="page" style="width:794px;margin:28px auto;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.14);font-family:'IBM Plex Sans',sans-serif;color:#1A1A1A;font-size:13px;line-height:1.6;padding:52px 56px 0;">
+  const docGenDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+
+  const divHtml = `<div style="width:794px;background:#fff;font-family:'IBM Plex Sans',sans-serif;color:#1A1A1A;font-size:13px;line-height:1.6;padding:52px 56px 28px;">
 
   <!-- Masthead -->
   <div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:14px;border-bottom:1px solid #1A1A1A;">
@@ -321,10 +301,10 @@ export function generateApplicationPDF(entry, glpiData) {
   <!-- Classification line -->
   <div style="display:flex;align-items:center;gap:16px;margin-top:14px;font-size:10px;letter-spacing:.1em;font-weight:600;">
     <span style="display:flex;align-items:center;gap:8px;color:${classColor};">
-      <span style="width:8px;height:8px;background:${classColor};border-radius:50%;flex:none;"></span>
+      <span style="width:8px;height:8px;background:${classColor};border-radius:50%;flex:none;display:inline-block;"></span>
       ${esc(gdpr.toUpperCase())} — ARCHITECTURE REFERENCE
     </span>
-    ${criticality ? `<span style="display:flex;align-items:center;gap:8px;color:#B23A2E;"><span style="width:8px;height:8px;background:#B23A2E;border-radius:50%;flex:none;"></span>${esc(criticality.toUpperCase())} — BUSINESS CRITICAL</span>` : ''}
+    ${criticality ? `<span style="display:flex;align-items:center;gap:8px;color:#B23A2E;"><span style="width:8px;height:8px;background:#B23A2E;border-radius:50%;flex:none;display:inline-block;"></span>${esc(criticality.toUpperCase())} — BUSINESS CRITICAL</span>` : ''}
   </div>
 
   <!-- Title -->
@@ -348,7 +328,7 @@ export function generateApplicationPDF(entry, glpiData) {
   </div>
 
   <!-- 01 Overview & Scope -->
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:32px;">
+  <div style="display:flex;gap:28px;margin-top:32px;">
     ${sectionHeader('01', `ARIA&nbsp;ID <span style="font-family:'IBM Plex Mono',monospace;color:#0084B2;">${esc(glpiId)}</span>${appType ? ` · <strong style="color:#1A1A1A;">${esc(appType)}</strong>` : ''}`)}
     <div style="flex:1;">
       ${h2('Overview &amp; Scope')}
@@ -360,14 +340,14 @@ export function generateApplicationPDF(entry, glpiData) {
         </div>
         <div style="flex:1;">
           <div style="font-size:10px;letter-spacing:.08em;color:#777;font-weight:600;margin-bottom:5px;">CLASSIFICATION</div>
-          <div style="font-weight:300;font-size:12.5px;line-height:1.7;"><span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:${classColor};"></span>${esc(gdpr)}</span></div>
+          <div style="font-weight:300;font-size:12.5px;line-height:1.7;"><span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:${classColor};display:inline-block;"></span>${esc(gdpr)}</span></div>
         </div>
       </div>
     </div>
   </div>
 
   <!-- 02 Architecture Diagram -->
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
+  <div style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('02', 'Top border = component class. Dashed = outside OMDS trust boundary.')}
     <div style="flex:1;">
       ${h2('Architecture Diagram')}
@@ -376,7 +356,7 @@ export function generateApplicationPDF(entry, glpiData) {
   </div>
 
   <!-- 03 Component & Module Inventory -->
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
+  <div style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('03', 'Stable refs <span style="font-family:\'IBM Plex Mono\',monospace;color:#0084B2;">C1–Cn</span> reused in the diagram &amp; dependency table.')}
     <div style="flex:1;">
       ${h2('Component &amp; Module Inventory')}
@@ -385,7 +365,7 @@ export function generateApplicationPDF(entry, glpiData) {
   </div>
 
   <!-- 04 Tech Stack & Runtime -->
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
+  <div style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('04', 'As recorded in ARIA / GLPI.')}
     <div style="flex:1;">
       ${h2('Tech Stack &amp; Runtime')}
@@ -408,7 +388,7 @@ export function generateApplicationPDF(entry, glpiData) {
   </div>
 
   <!-- 05 Dependencies & Integrations -->
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
+  <div style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('05', 'Dataflows where this application is source or destination.')}
     <div style="flex:1;">
       ${h2('Dependencies &amp; Integrations')}
@@ -417,7 +397,7 @@ export function generateApplicationPDF(entry, glpiData) {
   </div>
 
   <!-- 06 Deployment & Hosting -->
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
+  <div style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('06', 'As recorded in ARIA access fields.')}
     <div style="flex:1;">
       ${h2('Deployment &amp; Hosting')}
@@ -429,12 +409,12 @@ export function generateApplicationPDF(entry, glpiData) {
         ${kv('Health check',    healthUrl)}
         ${kv('Repository',      repoUrl)}
       </div>
-      ${!prodUrl && !qaUrl && !healthUrl && !repoUrl ? `<div style="display:flex;gap:9px;margin-top:14px;padding:10px 13px;background:#E6F2F7;border-radius:2px;font-size:11px;color:#33474f;font-weight:300;"><span style="color:#0084B2;font-weight:600;flex:none;">⟶ Note</span><span>Populate Production URL, Repository and Health Check fields in GLPI to enrich this section.</span></div>` : ''}
+      ${!prodUrl && !qaUrl && !healthUrl && !repoUrl ? `<div style="display:flex;gap:9px;margin-top:14px;padding:10px 13px;background:#E6F2F7;border-radius:2px;font-size:11px;color:#33474f;font-weight:300;"><span style="color:#0084B2;font-weight:600;flex:none;">&#8594; Note</span><span>Populate Production URL, Repository and Health Check fields in GLPI to enrich this section.</span></div>` : ''}
     </div>
   </div>
 
   <!-- 07 Ownership & Compliance -->
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
+  <div style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('07', '<strong style="color:#B23A2E;">Restricted ·</strong> Architecture detail for IT &amp; Security only.')}
     <div style="flex:1;">
       ${h2('Ownership')}
@@ -453,19 +433,18 @@ export function generateApplicationPDF(entry, glpiData) {
         </div>
       </div>` : ''}
       <div style="display:flex;gap:9px;margin-top:14px;padding:10px 13px;background:#fbeeec;border-radius:2px;font-size:11px;color:#5a322c;font-weight:300;">
-        <span style="color:#B23A2E;font-weight:600;flex:none;">⟶ Restricted use</span>
+        <span style="color:#B23A2E;font-weight:600;flex:none;">&#8594; Restricted use</span>
         <span>Architecture detail is restricted to IT &amp; Security. External disclosure prohibited.</span>
       </div>
     </div>
   </div>
 
   <!-- 08 Versioning & History -->
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:30px;">
+  <div style="display:flex;gap:28px;margin-top:30px;">
     ${sectionHeader('08', `Synced from ARIA / GLPI #${esc(glpiId)}.`)}
     <div style="flex:1;">
       ${h2('Versioning &amp; History')}
 
-      <!-- Version record -->
       <div style="font-size:10px;letter-spacing:.08em;color:#777;font-weight:600;margin-bottom:8px;">VERSION RECORD</div>
       <table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:22px;">
         <thead><tr>
@@ -480,11 +459,10 @@ export function generateApplicationPDF(entry, glpiData) {
           <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">Status since</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;">${esc(general['Status Since'] || '—')}</td></tr>
           <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">Last modified</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;">${esc(dateMod || '—')}</td></tr>
           <tr><td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;color:#777;">Last synced</td><td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;">${esc(lastSync || '—')}</td></tr>
-          <tr><td style="padding:8px 8px 8px 0;color:#777;">Document generated</td><td style="padding:8px 0 8px 8px;">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</td></tr>
+          <tr><td style="padding:8px 8px 8px 0;color:#777;">Document generated</td><td style="padding:8px 0 8px 8px;">${docGenDate}</td></tr>
         </tbody>
       </table>
 
-      <!-- Change history from tickets + changes -->
       ${(() => {
         const tickets = (glpiData && glpiData.tickets) || [];
         const changes  = (glpiData && glpiData.changes)  || [];
@@ -517,17 +495,11 @@ export function generateApplicationPDF(entry, glpiData) {
 
   <!-- Footer -->
   <div style="margin-top:38px;border-top:1px solid #1A1A1A;padding:12px 0 28px;display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#777;letter-spacing:.03em;">
-    <span>© OM Digital Solutions GmbH — Restricted use: IT &amp; Architecture review only. External disclosure prohibited.</span>
+    <span>&#169; OM Digital Solutions GmbH — Restricted use: IT &amp; Architecture review only. External disclosure prohibited.</span>
     <span style="font-family:'IBM Plex Mono',monospace;">ARIA&nbsp;#${esc(glpiId)} · ${esc(version)} · ${esc(name.replace(/^Application #\d+\s*—?\s*/i, '').substring(0, 30))}</span>
   </div>
 
-</div>
-<script>window.onload = () => { setTimeout(() => window.print(), 600); }</script>
-</body>
-</html>`;
+</div>`;
 
-  const win = window.open('', '_blank');
-  if (!win) { alert('Please allow pop-ups to generate the PDF.'); return; }
-  win.document.write(html);
-  win.document.close();
+  await renderDivToPdf(divHtml, `ARIA_App_${glpiId || name.replace(/[^a-z0-9]/gi, '_').substring(0, 30) || 'document'}.pdf`);
 }
