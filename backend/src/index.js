@@ -52,15 +52,17 @@ app.get('/api/stats', auth, async (req, res) => {
 
 // ── COMPLIANCE BREAKDOWN ─────────────────────────────────
 app.get('/api/stats/compliance', auth, async (req, res) => {
-  const s = driver.session();
   try {
     const breakdown = async (cypher) => {
-      const r = await s.run(cypher);
-      return r.records.map(rec => ({
-        field:     rec.get('field'),
-        total:     rec.get('total').toNumber(),
-        compliant: rec.get('compliant').toNumber(),
-      }));
+      const s = driver.session();
+      try {
+        const r = await s.run(cypher);
+        return r.records.map(rec => ({
+          field:     rec.get('field'),
+          total:     rec.get('total').toNumber(),
+          compliant: rec.get('compliant').toNumber(),
+        }));
+      } finally { await s.close(); }
     };
     const [dfByStatus, dfByGroup, dfByProtocol, dfByComplexity,
            appByType, appByEntity, appByStatus] = await Promise.all([
@@ -84,7 +86,6 @@ app.get('/api/stats/compliance', auth, async (req, res) => {
       applications: { byType: appByType, byEntity: appByEntity, byStatus: appByStatus },
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
-  finally { await s.close(); }
 });
 
 // ── ROUTES ───────────────────────────────────────────────
