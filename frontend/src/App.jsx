@@ -317,20 +317,114 @@ const NAV = [
   { id: "sync",      label: "GLPI Sync",    icon: "sync"      },
   { id: "map",       label: "Architecture", icon: "flow"      },
   { id: "train",     label: "Chat with ARIA", icon: "query"   },
+  { id: "accessreview", label: "Access Review", icon: "users"   },
   { id: "memory",    label: "Memory",       icon: "memory"    },
   { id: "settings",  label: "Settings",     icon: "settings"  },
 ];
+
+// ── COMPLIANCE PANEL (dashboard) ─────────────────────────
+const CompliancePanel = ({ title, icon, color, stats, breakdown, fieldSections }) => {
+  const [activeField, setActiveField] = useState(fieldSections[0]?.key || "");
+  const total       = stats?.total    ?? 0;
+  const compliant   = stats?.compliant ?? 0;
+  const nonCompliant = total - compliant;
+  const pct      = total > 0 ? Math.round((compliant / total) * 100) : 0;
+  const pctColor = pct >= 80 ? T.success : pct >= 50 ? T.warning : T.danger;
+
+  const activeItems = breakdown?.[activeField] || [];
+  const maxTotal = activeItems.reduce((m, i) => Math.max(m, i.total), 1);
+
+  return (
+    <Card style={{ padding: 22 }}>
+      {/* Title */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+        <Icon name={icon} size={14} color={color} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>{title}</span>
+      </div>
+
+      {/* KPI row */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginBottom: 16 }}>
+        {[
+          { label: "Total",         value: total,        c: T.textSecondary },
+          { label: "Compliant",     value: compliant,    c: T.success       },
+          { label: "Non-Compliant", value: nonCompliant, c: nonCompliant > 0 ? T.danger : T.textDim },
+          { label: "Rate",          value: `${pct}%`,    c: pctColor        },
+        ].map(k => (
+          <div key={k.label} style={{ background: T.bgElevated, borderRadius: T.radiusSm, padding: "10px 12px", border: `1px solid ${T.border}` }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: k.c, lineHeight: 1 }}>{k.value}</div>
+            <div style={{ fontSize: 10, color: T.textMuted, marginTop: 4, fontWeight: 500 }}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ height: 6, borderRadius: 4, background: T.border, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: pctColor, borderRadius: 4, transition: "width 0.6s ease" }} />
+        </div>
+        <div style={{ fontSize: 10, color: T.textMuted, marginTop: 4 }}>{compliant} of {total} items compliant</div>
+      </div>
+
+      {/* Field selector */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 14, flexWrap: "wrap" }}>
+        {fieldSections.map(f => {
+          const active = activeField === f.key;
+          return (
+            <button key={f.key} onClick={() => setActiveField(f.key)} style={{
+              padding: "3px 10px", borderRadius: 20, cursor: "pointer", fontSize: 11, fontWeight: 600,
+              background: active ? `${color}20` : "transparent",
+              color: active ? color : T.textMuted,
+              border: `1.5px solid ${active ? color + "60" : T.border}`,
+              fontFamily: "inherit", transition: "all 0.15s",
+            }}>{f.label}</button>
+          );
+        })}
+      </div>
+
+      {/* Breakdown bars */}
+      {activeItems.length === 0 ? (
+        <div style={{ fontSize: 12, color: T.textDim, padding: "14px 0", textAlign: "center" }}>
+          {breakdown ? "No data for this field." : "Loading…"}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {activeItems.map(item => {
+            const iPct   = item.total > 0 ? Math.round((item.compliant / item.total) * 100) : 0;
+            const iColor = iPct >= 80 ? T.success : iPct >= 50 ? T.warning : T.danger;
+            const trackW = Math.round((item.total / maxTotal) * 100);
+            return (
+              <div key={item.field} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div title={item.field} style={{ width: 130, fontSize: 11, color: T.textSecondary, textAlign: "right", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {item.field}
+                </div>
+                <div style={{ flex: 1, position: "relative", height: 16, background: T.border, borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${trackW}%`, background: T.borderLight, borderRadius: 4 }} />
+                  <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${trackW * iPct / 100}%`, background: iColor, borderRadius: 4, opacity: 0.85 }} />
+                </div>
+                <div style={{ fontSize: 10, color: T.textMuted, flexShrink: 0, width: 76, textAlign: "right" }}>
+                  {item.compliant}/{item.total}&nbsp;<span style={{ color: iColor, fontWeight: 700 }}>{iPct}%</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+};
 
 // ── DASHBOARD ────────────────────────────────────────────
 const Dashboard = ({ api, setPage }) => {
   const [stats, setStats] = useState(null);
   const [health, setHealth] = useState(null);
   const [recent, setRecent] = useState([]);
+  const [compliance, setCompliance] = useState(null);
 
   useEffect(() => {
     api.get("/health").then(setHealth).catch(() => {});
     api.get("/api/stats").then(setStats).catch(() => {});
     api.get("/api/memory?limit=5").then(d => setRecent(Array.isArray(d) ? d : [])).catch(() => {});
+    api.get("/api/stats/compliance").then(setCompliance).catch(() => {});
   }, []);
 
   const neo4jOk = health?.neo4j === "connected";
@@ -343,8 +437,8 @@ const Dashboard = ({ api, setPage }) => {
     { label: "Training Sessions",      value: stats?.sessions  || 0, color: T.success, glow: T.successGlow, icon: "train"     },
     { label: "Memory Items",           value: stats?.memory    || 0, color: T.warning, glow: T.warningGlow, icon: "memory"    },
     { label: "Neo4j Graph",            value: neo4jOk ? "Live" : "Offline", color: neo4jOk ? T.success : T.danger, glow: neo4jOk ? T.successGlow : T.dangerGlow, icon: "link2" },
-    { label: "Dataflow Compliance",    value: dfPct !== null ? `${dfPct}%` : "—", color: pctColor(dfPct), glow: pctGlow(dfPct), icon: "info" },
-    { label: "App Compliance",         value: apPct !== null ? `${apPct}%` : "—", color: pctColor(apPct), glow: pctGlow(apPct), icon: "link2" },
+    { label: "Dataflow Compliance", value: dfPct !== null ? `${dfPct}%` : "—", sub: dfPct !== null ? `${stats.compliance.dataflows.compliant}/${stats.compliance.dataflows.total}` : null, color: pctColor(dfPct), glow: pctGlow(dfPct), icon: "info" },
+    { label: "App Compliance",      value: apPct !== null ? `${apPct}%` : "—", sub: apPct !== null ? `${stats.compliance.applications.compliant}/${stats.compliance.applications.total}` : null, color: pctColor(apPct), glow: pctGlow(apPct), icon: "monitor" },
   ];
 
   const steps = [
@@ -375,6 +469,7 @@ const Dashboard = ({ api, setPage }) => {
               <Icon name={s.icon} size={16} color={s.color} />
             </div>
             <div style={{ fontSize: 26, fontWeight: 800, color: s.color, letterSpacing: "-0.03em", lineHeight: 1 }}>{s.value}</div>
+            {s.sub && <div style={{ fontSize: 11, color: s.color, marginTop: 2, opacity: 0.7 }}>{s.sub}</div>}
             <div style={{ fontSize: 11, color: T.textMuted, marginTop: 5, fontWeight: 500 }}>{s.label}</div>
           </Card>
         ))}
@@ -418,6 +513,43 @@ const Dashboard = ({ api, setPage }) => {
           ))}
         </Card>
       </div>
+
+      {/* Compliance breakdown */}
+      {stats && (stats.compliance.dataflows.total > 0 || stats.compliance.applications.total > 0) && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "28px 0 16px" }}>
+            <Icon name="info" size={14} color={T.textMuted} />
+            <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>Compliance Breakdown</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <CompliancePanel
+              title="Dataflow Compliance"
+              icon="flow"
+              color={T.danger}
+              stats={stats.compliance.dataflows}
+              breakdown={compliance?.dataflows}
+              fieldSections={[
+                { key: "byStatus",    label: "By Status" },
+                { key: "byFlowGroup", label: "By Flow Group" },
+                { key: "byProtocol",  label: "By Protocol" },
+                { key: "byComplexity",label: "By Type" },
+              ]}
+            />
+            <CompliancePanel
+              title="Application Compliance"
+              icon="monitor"
+              color={T.accent}
+              stats={stats.compliance.applications}
+              breakdown={compliance?.applications}
+              fieldSections={[
+                { key: "byType",   label: "By Type" },
+                { key: "byEntity", label: "By Entity" },
+                { key: "byStatus", label: "By Status" },
+              ]}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 };
@@ -464,10 +596,11 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
       setLoadingGlpi(true);
       api.get(`/api/pipeline/dataflow/${dfId}/linked`)
         .then(d => setGlpiData({
-          tickets:        d.tickets  || [],
-          changes:        d.changes  || [],
-          problems:       [],
-          associatedItems: d.apps    || [],
+          tickets:         d.tickets  || [],
+          changes:         d.changes  || [],
+          problems:        [],
+          associatedItems: d.apps     || [],
+          history:         d.history  || [],
         }))
         .catch(e => setGlpiError(e.message))
         .finally(() => setLoadingGlpi(false));
@@ -654,7 +787,7 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
             <h2 style={{ fontSize: 17, fontWeight: 700, color: T.text, lineHeight: 1.3, margin: 0 }}>{entry.topic}</h2>
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 16, flexShrink: 0 }}>
-            <Btn size="sm" variant="secondary" icon="download" onClick={() => isDataflow ? generateDataflowPDF(entry) : entry.category === 'application' ? generateApplicationPDF(entry, glpiData) : generateKnowledgePDF(entry)}>Download PDF</Btn>
+            <Btn size="sm" variant="secondary" icon="download" onClick={() => isDataflow ? generateDataflowPDF(entry, glpiData?.history || []) : entry.category === 'application' ? generateApplicationPDF(entry, glpiData) : generateKnowledgePDF(entry)}>Download PDF</Btn>
             <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.textMuted, padding: 4, display: "flex", borderRadius: 6 }}>
               <Icon name="close" size={18} color={T.textMuted} />
             </button>
@@ -2838,6 +2971,321 @@ const Settings = ({ api }) => {
   );
 };
 
+// ── ACCESS REVIEW ─────────────────────────────────────────
+const decodeHtml = s => {
+  if (!s) return s;
+  return s.replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+          .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+};
+
+const AccessReview = ({ api }) => {
+  const [subTab,      setSubTab]      = useState('apps');
+  const [apps,        setApps]        = useState([]);
+  const [users,       setUsers]       = useState([]);
+  const [groups,      setGroups]      = useState([]);
+  const [loading,     setLoading]     = useState(false);
+  const [search,      setSearch]      = useState('');
+  const [auditFilter, setAuditFilter] = useState('all');
+  const [saving,      setSaving]      = useState(null);
+  const [editing,     setEditing]     = useState(null);
+  const [error,       setError]       = useState('');
+  const [expandedId,    setExpandedId]    = useState(null);
+  const [linkedCache,   setLinkedCache]   = useState({});
+  const [loadingLinked, setLoadingLinked] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [appData, userData, groupData] = await Promise.all([
+        api.get('/api/knowledge?category=application'),
+        api.get('/api/useraccess/users'),
+        api.get('/api/useraccess/groups'),
+      ]);
+      setApps(Array.isArray(appData) ? appData : []);
+      setUsers(Array.isArray(userData) ? userData : []);
+      setGroups(Array.isArray(groupData) ? groupData : []);
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const updateAudit = async (id, status, note) => {
+    setSaving(id);
+    try {
+      await api.patch(`/api/useraccess/knowledge/${encodeURIComponent(id)}/audit`, { status, note });
+      setApps(prev => prev.map(a =>
+        a.id === id ? { ...a, auditStatus: status, auditNote: note, auditAt: new Date().toISOString() } : a
+      ));
+      setEditing(null);
+    } catch (e) { setError(e.message); }
+    setSaving(null);
+  };
+
+  const ACCESS_KW = ['access', 'accès', 'account', 'compte', 'user', 'utilisateur', 'permission', 'rights', 'droits', 'credential', 'password', 'mot de passe', 'login', 'connexion', 'role', 'profil', 'profile', 'authoriz', 'autoris', 'privilege', 'habilitation', 'identif'];
+
+  const loadLinked = async (glpiId) => {
+    if (expandedId === glpiId) { setExpandedId(null); return; }
+    setExpandedId(glpiId);
+    if (linkedCache[glpiId]) return;
+    setLoadingLinked(glpiId);
+    try {
+      const d = await api.get(`/api/pipeline/app/${encodeURIComponent(glpiId)}/linked`);
+      const isAccessTicket = t => {
+        const text = ((t.name || '') + ' ' + (t.itilcategories_id || '')).toLowerCase();
+        return ACCESS_KW.some(kw => text.includes(kw));
+      };
+      setLinkedCache(prev => ({
+        ...prev,
+        [glpiId]: {
+          users:      d.users   || [],
+          tickets:    (d.tickets || []).filter(isAccessTicket),
+          ticketTotal: (d.tickets || []).length,
+        }
+      }));
+    } catch (e) { setLinkedCache(prev => ({ ...prev, [glpiId]: { error: e.message } })); }
+    setLoadingLinked(null);
+  };
+
+  const TICKET_STATUS = { 1: { label: 'New', color: '#3B82F6' }, 2: { label: 'In progress', color: '#F59E0B' }, 3: { label: 'In progress', color: '#F59E0B' }, 4: { label: 'Pending', color: '#8B5CF6' }, 5: { label: 'Solved', color: '#10B981' }, 6: { label: 'Closed', color: T.textDim } };
+
+  // Strip "Application #ID — " prefix from topic to get a clean display name
+  const appName = topic => (topic || '').replace(/^Application\s*#\d+\s*[—\-]\s*/i, '').trim() || topic || '—';
+
+  const sl = search.toLowerCase();
+  const filteredApps = apps.filter(a => {
+    const name = appName(a.topic);
+    const hit  = !search || name.toLowerCase().includes(sl) || (a.glpiId || '').includes(search) || (a.owner || '').toLowerCase().includes(sl);
+    const st   = a.auditStatus || 'pending';
+    return hit && (auditFilter === 'all' || st === auditFilter);
+  });
+  const filteredUsers  = users.filter(u  => !search || (u.name || '').toLowerCase().includes(sl) || (u.email || '').toLowerCase().includes(sl));
+  const filteredGroups = groups.filter(g => !search || (g.name || '').toLowerCase().includes(sl));
+
+  const auditStats = {
+    total:       apps.length,
+    pending:     apps.filter(a => !a.auditStatus || a.auditStatus === 'pending').length,
+    ok:          apps.filter(a => a.auditStatus === 'ok').length,
+    discrepancy: apps.filter(a => a.auditStatus === 'discrepancy').length,
+  };
+
+  const sColor = s => ({ ok: T.success, discrepancy: T.danger, pending: T.textDim }[s] || T.textDim);
+  const sLabel = s => ({ ok: 'Verified OK', discrepancy: 'Discrepancy', pending: 'Pending' }[s] || 'Pending');
+
+  return (
+    <div>
+      <SectionHeader
+        title="Access Review"
+        subtitle="Cross-reference application ownership and user access between GLPI and connected systems"
+        actions={
+          <Btn variant="ghost" icon="refresh" onClick={load} disabled={loading}>
+            {loading ? 'Loading…' : 'Refresh'}
+          </Btn>
+        }
+      />
+
+      {apps.length > 0 && (
+        <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+          {[
+            { label: 'Total Apps',    value: auditStats.total,       color: T.accent  },
+            { label: 'Pending',       value: auditStats.pending,     color: T.textDim },
+            { label: 'Verified OK',   value: auditStats.ok,          color: T.success },
+            { label: 'Discrepancies', value: auditStats.discrepancy, color: T.danger  },
+          ].map(s => (
+            <Card key={s.label} style={{ padding: '12px 18px', flex: 1, textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: s.color }}>{s.value}</div>
+              <div style={{ fontSize: 11, color: T.textMuted, marginTop: 3 }}>{s.label}</div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {[
+          ['apps',   'Applications', T.accent,  apps.length],
+          ['users',  'Users',        T.success, users.length],
+          ['groups', 'Groups',       T.purple,  groups.length],
+        ].map(([v, lbl, col, cnt]) => (
+          <button key={v} onClick={() => { setSubTab(v); setSearch(''); }}
+            style={{
+              padding: '7px 16px', borderRadius: 8,
+              border: `1px solid ${subTab === v ? col : T.border}`,
+              background: subTab === v ? col + '18' : 'transparent',
+              color: subTab === v ? col : T.textMuted,
+              cursor: 'pointer', fontSize: 13, fontWeight: subTab === v ? 600 : 400,
+              fontFamily: 'inherit',
+            }}>
+            {lbl} ({cnt})
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center' }}>
+        <DarkInput
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder={subTab === 'apps' ? 'Search applications, owner…' : subTab === 'users' ? 'Search users or email…' : 'Search groups…'}
+          style={{ flex: 1 }}
+        />
+        {subTab === 'apps' && (
+          <DarkSelect value={auditFilter} onChange={e => setAuditFilter(e.target.value)} style={{ width: 160 }}>
+            <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="ok">Verified OK</option>
+            <option value="discrepancy">Discrepancy</option>
+          </DarkSelect>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ padding: '10px 14px', background: T.danger + '18', color: T.danger, borderRadius: T.radius, marginBottom: 16, fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <EmptyState icon="users" title="Loading data…" description="Fetching applications, users and groups" />
+      ) : subTab === 'apps' ? (
+        filteredApps.length === 0 ? (
+          <EmptyState icon="monitor" title="No applications found"
+            description={apps.length === 0 ? 'Run a GLPI sync first to populate application data' : 'No applications match the current filter'} />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {filteredApps.map(app => {
+              const st        = app.auditStatus || 'pending';
+              const name      = appName(app.topic);
+              const isEditing = editing?.id === app.id;
+              const isSaving  = saving === app.id;
+              return (
+                <Card key={app.id} style={{ padding: '14px 18px' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 600, fontSize: 14, color: T.text }}>{name}</span>
+                        {app.glpiId && <Badge label={`#${app.glpiId}`} color={T.textDim} />}
+                        {app.reviewStatus && app.reviewStatus !== '0' && (
+                          <Badge label={app.reviewStatus.replace(/_/g, ' ')} color={T.warning} />
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 18, marginTop: 6, fontSize: 12, color: T.textMuted, flexWrap: 'wrap' }}>
+                        {app.owner && app.owner !== '0' && (
+                          <span>Owner: <span style={{ color: T.text }}>{decodeHtml(app.owner)}</span></span>
+                        )}
+                        {app.supplier && app.supplier !== '0' && (
+                          <span>Supplier: <span style={{ color: T.text }}>{decodeHtml(app.supplier)}</span></span>
+                        )}
+                        {app.sla && app.sla !== '0' && (
+                          <span>SLA: <span style={{ color: T.text }}>{decodeHtml(app.sla)}</span></span>
+                        )}
+                        {app.urlProd && (
+                          <span>Prod: <span style={{ color: T.accent }}>{app.urlProd}</span></span>
+                        )}
+                        {app.urlQA && (
+                          <span>QA: <span style={{ color: T.purple }}>{app.urlQA}</span></span>
+                        )}
+                      </div>
+                      {app.auditNote && !isEditing && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: T.textMuted, fontStyle: 'italic', padding: '6px 10px', background: T.bgElevated, borderRadius: 6, borderLeft: `3px solid ${sColor(st)}` }}>
+                          {app.auditNote}
+                        </div>
+                      )}
+                      {app.auditAt && !isEditing && (
+                        <div style={{ marginTop: 4, fontSize: 11, color: T.textDim }}>
+                          Last checked: {new Date(app.auditAt).toLocaleDateString()}
+                        </div>
+                      )}
+                      {isEditing && (
+                        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <DarkTextarea
+                            value={editing.note}
+                            onChange={e => setEditing(prev => ({ ...prev, note: e.target.value }))}
+                            placeholder="Audit note — describe what was checked and any discrepancy found…"
+                            rows={2}
+                          />
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <Btn variant="primary" size="sm" icon="check" color={T.success}
+                              onClick={() => updateAudit(app.id, 'ok', editing.note)} disabled={isSaving}>
+                              {isSaving ? 'Saving…' : 'Mark Verified OK'}
+                            </Btn>
+                            <Btn variant="danger" size="sm" icon="warning"
+                              onClick={() => updateAudit(app.id, 'discrepancy', editing.note)} disabled={isSaving}>
+                              {isSaving ? 'Saving…' : 'Mark Discrepancy'}
+                            </Btn>
+                            <Btn variant="ghost" size="sm" onClick={() => setEditing(null)}>Cancel</Btn>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
+                      <Badge label={sLabel(st)} color={sColor(st)} />
+                      {!isEditing && (
+                        <Btn variant="ghost" size="sm" icon="edit"
+                          onClick={() => setEditing({ id: app.id, note: app.auditNote || '' })}>
+                          Audit
+                        </Btn>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )
+      ) : subTab === 'users' ? (
+        filteredUsers.length === 0 ? (
+          <EmptyState icon="user" title="No users found"
+            description={users.length === 0 ? 'Run a GLPI sync to import users' : 'No users match the search'} />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {filteredUsers.map(u => (
+              <Card key={u.glpiId || u.name} style={{ padding: '12px 18px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: T.accentGlow, border: `1px solid ${T.accent}30`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <Icon name="user" size={16} color={T.accent} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: T.text }}>{u.name || '—'}</div>
+                    <div style={{ fontSize: 12, color: T.textMuted, marginTop: 3, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                      {u.email && <span>{u.email}</span>}
+                      {u.glpiId && <span style={{ color: T.textDim }}>GLPI #{u.glpiId}</span>}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )
+      ) : (
+        filteredGroups.length === 0 ? (
+          <EmptyState icon="users" title="No groups found"
+            description={groups.length === 0 ? 'Run a GLPI sync to import groups' : 'No groups match the search'} />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {filteredGroups.map(g => (
+              <Card key={g.glpiId || g.name} style={{ padding: '12px 18px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: T.purple + '18', border: `1px solid ${T.purple}30`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <Icon name="users" size={16} color={T.purple} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: T.text }}>{g.name || '—'}</div>
+                    <div style={{ fontSize: 12, color: T.textMuted, marginTop: 3, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                      {g.entity && <span>Entity: <span style={{ color: T.text }}>{g.entity}</span></span>}
+                      {g.comment && <span>{g.comment}</span>}
+                      {g.glpiId && <span style={{ color: T.textDim }}>GLPI #{g.glpiId}</span>}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )
+      )}
+    </div>
+  );
+};
+
 // ── MAIN APP ─────────────────────────────────────────────
 export default function App() {
   const [page, setPage] = useState("dashboard");
@@ -2919,7 +3367,7 @@ export default function App() {
       {/* Main content */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ flex: 1, overflowY: page === "map" ? "hidden" : "auto", padding: page === "map" ? 0 : 24, display: page === "map" ? "flex" : "block", flexDirection: "column" }}>
-          {(()=>{switch(page){case"dashboard":return<Dashboard api={api}/>;case"knowledge":return<KnowledgeBase api={api}/>;case"sync":return<GLPISync api={api}/>;case"map":return<ArchitectureMap api={api}/>;case"train":return<TrainAria api={api}/>;case"memory":return<MemoryView api={api}/>;case"settings":return<Settings api={api}/>;default:return<Dashboard api={api}/>;}})()}
+          {(()=>{switch(page){case"dashboard":return<Dashboard api={api}/>;case"knowledge":return<KnowledgeBase api={api}/>;case"sync":return<GLPISync api={api}/>;case"map":return<ArchitectureMap api={api}/>;case"train":return<TrainAria api={api}/>;case"memory":return<MemoryView api={api}/>;case"settings":return<Settings api={api}/>;case"accessreview":return<AccessReview api={api}/>;default:return<Dashboard api={api}/>;}})()}
         </div>
       </div>
     </div>

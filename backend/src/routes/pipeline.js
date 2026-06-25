@@ -2148,13 +2148,51 @@ router.get('/dataflow/:id/linked', async (req, res) => {
           }
         }
 
+        // Fetch search option IDs → field names for log entries
+        enforceGetOnly('GET');
+        const soRes = await fetch(`${base}/apirest.php/PluginDataflowsDataflow/listSearchOptions`, {
+          method: 'GET', headers: hdrs, agent,
+        }).catch(() => null);
+        const fieldMap = {};
+        if (soRes && soRes.ok) {
+          const soBody = await soRes.json().catch(() => ({}));
+          if (soBody && typeof soBody === 'object') {
+            for (const [k, v] of Object.entries(soBody)) {
+              if (!isNaN(Number(k)) && v && v.name) fieldMap[k] = v.name;
+            }
+          }
+        }
+
+        // Fetch history log for this dataflow
+        enforceGetOnly('GET');
+        const logRes = await fetch(`${base}/apirest.php/PluginDataflowsDataflow/${id}/Log?range=0-999`, {
+          method: 'GET', headers: hdrs, agent,
+        }).catch(() => null);
+        let history = [];
+        if (logRes && logRes.ok) {
+          const logBody = await logRes.json().catch(() => []);
+          if (Array.isArray(logBody)) {
+            history = logBody
+              .filter(l => l && l.date_mod)
+              .map(l => ({
+                date:          l.date_mod || '',
+                user:          (l.user_name || '').replace(/\s*\(\d+\)$/, '').trim(),
+                field:         fieldMap[String(l.id_search_option)] || '',
+                old_value:     l.old_value || '',
+                new_value:     l.new_value || '',
+                linked_action: Number(l.linked_action) || 0,
+                itemtype_link: l.itemtype_link || '',
+              }));
+          }
+        }
+
         fetch(`${base}/apirest.php/killSession`, { method: 'GET', headers: { 'Session-Token': session_token, 'App-Token': cfg.glpiAppToken }, agent }).catch(() => {});
       }
     }
 
     const mapTicket = t => ({ id: t.glpiId, name: t.name, status: t.status, priority: t.priority, itilcategories_id: t.category, date_mod: t.dateMod, date: t.date });
     const mapChange = c => ({ id: c.glpiId, name: c.name, status: c.status, priority: c.priority, itilcategories_id: c.category, date_mod: c.dateMod, date: c.date });
-    res.json({ tickets: tickets.map(mapTicket), changes: changes.map(mapChange), apps });
+    res.json({ tickets: tickets.map(mapTicket), changes: changes.map(mapChange), apps, history });
   } catch (e) { res.status(500).json({ error: e.message }); }
   finally { await s.close(); }
 });

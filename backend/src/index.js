@@ -50,6 +50,43 @@ app.get('/api/stats', auth, async (req, res) => {
   finally { await s.close(); }
 });
 
+// ── COMPLIANCE BREAKDOWN ─────────────────────────────────
+app.get('/api/stats/compliance', auth, async (req, res) => {
+  const s = driver.session();
+  try {
+    const breakdown = async (cypher) => {
+      const r = await s.run(cypher);
+      return r.records.map(rec => ({
+        field:     rec.get('field'),
+        total:     rec.get('total').toNumber(),
+        compliant: rec.get('compliant').toNumber(),
+      }));
+    };
+    const [dfByStatus, dfByGroup, dfByProtocol, dfByComplexity,
+           appByType, appByEntity, appByStatus] = await Promise.all([
+      breakdown(`MATCH (d:Dataflow) WHERE d.status IS NOT NULL AND d.status <> ''
+        RETURN d.status AS field, count(d) AS total, sum(CASE WHEN d.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
+      breakdown(`MATCH (d:Dataflow) WHERE d.flowGroup IS NOT NULL AND d.flowGroup <> ''
+        RETURN d.flowGroup AS field, count(d) AS total, sum(CASE WHEN d.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
+      breakdown(`MATCH (d:Dataflow) WHERE d.protocol IS NOT NULL AND d.protocol <> ''
+        RETURN d.protocol AS field, count(d) AS total, sum(CASE WHEN d.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
+      breakdown(`MATCH (d:Dataflow) WHERE d.complexity IS NOT NULL AND d.complexity <> ''
+        RETURN d.complexity AS field, count(d) AS total, sum(CASE WHEN d.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
+      breakdown(`MATCH (a:Application) WHERE a.glpiId IS NOT NULL AND a.type IS NOT NULL AND a.type <> ''
+        RETURN a.type AS field, count(a) AS total, sum(CASE WHEN a.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
+      breakdown(`MATCH (a:Application) WHERE a.glpiId IS NOT NULL AND a.entity IS NOT NULL AND a.entity <> ''
+        RETURN a.entity AS field, count(a) AS total, sum(CASE WHEN a.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
+      breakdown(`MATCH (a:Application) WHERE a.glpiId IS NOT NULL AND a.status IS NOT NULL AND a.status <> ''
+        RETURN a.status AS field, count(a) AS total, sum(CASE WHEN a.compliant = true THEN 1 ELSE 0 END) AS compliant ORDER BY total DESC LIMIT 20`),
+    ]);
+    res.json({
+      dataflows:    { byStatus: dfByStatus, byFlowGroup: dfByGroup, byProtocol: dfByProtocol, byComplexity: dfByComplexity },
+      applications: { byType: appByType, byEntity: appByEntity, byStatus: appByStatus },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+  finally { await s.close(); }
+});
+
 // ── ROUTES ───────────────────────────────────────────────
 app.use('/api/audit',     auth, require('./routes/audit'));
 app.use('/api/knowledge', auth, require('./routes/knowledge'));
@@ -59,6 +96,7 @@ app.use('/api/query',     auth, require('./routes/query'));
 app.use('/api/train',     auth, require('./routes/train'));
 app.use('/api/sync',      auth, require('./routes/sync'));
 app.use('/api/pipeline',  auth, require('./routes/pipeline'));
+app.use('/api/useraccess', auth, require('./routes/useraccess'));
 
 // ── START ────────────────────────────────────────────────
 app.listen(PORT, async () => {
