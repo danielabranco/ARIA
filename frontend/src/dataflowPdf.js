@@ -1,7 +1,7 @@
 // Dataflow technical-documentation PDF generator.
-// Builds the IBM Plex Sans design and opens the browser print dialog.
-// All data is derived from the KB entry's content markdown — no extra API calls.
+// Builds the IBM Plex Sans design and downloads a PDF directly via html2canvas + jsPDF.
 
+import { renderDivToPdf } from './pdfUtils';
 import logoB64 from './omds_logo_b64';
 
 // ─── markdown helpers ────────────────────────────────────────────────────────
@@ -23,10 +23,8 @@ function parseSection(content, heading) {
   return result;
 }
 
-// strip markdown links: [label](url) → label
 function stripLink(s) { return (s || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim(); }
 
-// strip HTML entities only (decoded by browser when injected)
 function fmtDate(d) {
   if (!d || d === '—') return '—';
   try { return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }); }
@@ -69,11 +67,11 @@ function buildSteps(src, dst, trigger, frequency, protocol, pattern, fromAuth, e
   ];
 }
 
-// ─── HTML template ───────────────────────────────────────────────────────────
+// ─── HTML template helpers ───────────────────────────────────────────────────
 
 function section(num, sidebar, body) {
   return `
-  <div class="keepwhole" style="display:flex;gap:28px;margin-top:${num === '01' ? 32 : 30}px;">
+  <div style="display:flex;gap:28px;margin-top:${num === '01' ? 32 : 30}px;">
     <div style="width:120px;flex:none;">
       <div style="font-size:32px;font-weight:200;color:#0084B2;line-height:1;">${num}</div>
       <div style="font-size:10px;letter-spacing:.06em;color:#777;margin-top:8px;line-height:1.5;">${sidebar}</div>
@@ -83,7 +81,7 @@ function section(num, sidebar, body) {
 }
 
 function h2(label) {
-  return `<h2 style="margin:0 0 12px;font-size:19px;font-weight:400;display:flex;align-items:center;gap:9px;"><span style="width:7px;height:7px;background:#0084B2;flex:none;"></span>${label}</h2>`;
+  return `<h2 style="margin:0 0 12px;font-size:19px;font-weight:400;display:flex;align-items:center;gap:9px;"><span style="width:7px;height:7px;background:#0084B2;flex:none;display:inline-block;"></span>${label}</h2>`;
 }
 
 function kv(label, value, colorVal) {
@@ -94,14 +92,13 @@ function kv(label, value, colorVal) {
 
 // ─── main export ─────────────────────────────────────────────────────────────
 
-export function generateDataflowPDF(entry) {
+export async function generateDataflowPDF(entry) {
   const content  = entry.content || '';
   const gen      = parseSection(content, 'General');
   const flow     = parseSection(content, 'Flow');
   const tech     = parseSection(content, 'Technical');
   const own      = parseSection(content, 'Ownership');
 
-  // identity
   const glpiId   = String(entry.glpiId || gen['GLPI ID'] || '');
   const rawName  = entry.topic || gen['Name'] || '';
   const nm       = rawName.match(/^\[(.+?)\]\s*[-–→]+\s*\[(.+?)\](.*)/);
@@ -109,14 +106,12 @@ export function generateDataflowPDF(entry) {
   const dstTag   = nm ? nm[2] : stripLink(gen['To']   || '');
   const subtitle = nm ? nm[3].trim() : '';
 
-  // status & classification
   const status    = entry.dfStatus || gen['Status'] || '';
   const gdpr      = entry.dfGdpr   || gen['GDPR Level'] || '';
   const clrClass  = CLASS_COLOR[gdpr] || '#C28A1E';
   const indicator = gen['Indicator'] || '';
   const docGood   = entry.compliant === true || /good/i.test(indicator);
 
-  // technical
   const protocol  = tech['Protocol']      || '';
   const pattern   = tech['Pattern']       || '';
   const mode      = tech['Mode']          || '';
@@ -126,7 +121,6 @@ export function generateDataflowPDF(entry) {
   const errHdl    = tech['Error Handling']|| '';
   const priority  = tech['Priority']      || '';
 
-  // flow
   const fromSys   = stripLink(gen['From'] || flow['From'] || srcTag);
   const toSys     = stripLink(gen['To']   || flow['To']   || dstTag);
   const fromAuth  = flow['From Auth'] || 'API Key Authentication';
@@ -134,50 +128,23 @@ export function generateDataflowPDF(entry) {
   const toExtUrl  = flow['To External URL'] || '';
   const destSaaS  = !!(toExtUrl || /zendesk|salesforce|hubspot|servicenow|freshdesk/i.test(dstTag));
 
-  // ownership
   const owner     = own['Owner']         || '';
   const group     = own['Group']         || '';
   const suppGroup = own['Support Group'] || '';
 
-  // metadata
   const flowGroup = gen['Flow Group']  || '';
   const lastMod   = gen['Last Modified']|| '';
   const lastSync  = gen['Last Synced'] || '';
   const entity    = 'OM Digital Solutions GmbH';
 
-  // extract blockquote description
   const descMatch = content.match(/^> (.+)/m);
   const desc = descMatch ? descMatch[1].trim() : '';
 
-  // steps
   const steps = buildSteps(srcTag || fromSys, dstTag || toSys, trigger, frequency, protocol, pattern, fromAuth, errHdl, group);
 
-  // ── HTML ──────────────────────────────────────────────────────────────────
+  // ── HTML body div (no <html>/<head>/<body> wrapper) ───────────────────────
 
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-*{box-sizing:border-box;}
-body{margin:0;background:#e9ecee;}
-@page{size:A4;margin:13mm;}
-@media print{
-  html{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-  body{background:#fff;}
-  [data-page]{box-shadow:none!important;margin:0!important;width:auto!important;padding:0!important;}
-  h2,h1{break-after:avoid;}
-  table,.keepwhole{break-inside:avoid;}
-}
-</style>
-</head>
-<body>
-
-<div data-page style="width:794px;margin:28px auto;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.14);font-family:'IBM Plex Sans',sans-serif;color:#1A1A1A;font-size:13px;line-height:1.6;padding:52px 56px 0;">
+  const divHtml = `<div style="width:794px;background:#fff;font-family:'IBM Plex Sans',sans-serif;color:#1A1A1A;font-size:13px;line-height:1.6;padding:52px 56px 28px;">
 
   <!-- Masthead -->
   <div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:14px;border-bottom:1px solid #1A1A1A;">
@@ -191,11 +158,11 @@ body{margin:0;background:#e9ecee;}
   <!-- Classification badges -->
   <div style="display:flex;align-items:center;gap:16px;margin-top:14px;font-size:10px;letter-spacing:.1em;font-weight:600;">
     <span style="display:flex;align-items:center;gap:8px;color:${clrClass};">
-      <span style="width:8px;height:8px;background:${clrClass};border-radius:50%;flex:none;"></span>
+      <span style="width:8px;height:8px;background:${clrClass};border-radius:50%;flex:none;display:inline-block;"></span>
       ${(gdpr || 'CUSTOMER CONFIDENTIAL DATA').toUpperCase()}
     </span>
     <span style="display:flex;align-items:center;gap:8px;color:#B23A2E;">
-      <span style="width:8px;height:8px;background:#B23A2E;border-radius:50%;flex:none;"></span>
+      <span style="width:8px;height:8px;background:#B23A2E;border-radius:50%;flex:none;display:inline-block;"></span>
       IT DEPARTMENT ONLY — EXTERNAL DISCLOSURE PROHIBITED
     </span>
   </div>
@@ -236,7 +203,7 @@ body{margin:0;background:#e9ecee;}
       </div>
       <div style="flex:1;">
         <div style="font-size:10px;letter-spacing:.08em;color:#777;font-weight:600;margin-bottom:5px;">DOCUMENTATION INDICATOR</div>
-        <div style="font-weight:300;font-size:12.5px;line-height:1.7;"><span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:${docGood ? '#3E7C5A' : '#C28A1E'};"></span>${docGood ? 'Good documentation' : 'Needs review'}</span></div>
+        <div style="font-weight:300;font-size:12.5px;line-height:1.7;"><span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:${docGood ? '#3E7C5A' : '#C28A1E'};display:inline-block;"></span>${docGood ? 'Good documentation' : 'Needs review'}</span></div>
       </div>
     </div>`
   )}
@@ -256,13 +223,13 @@ body{margin:0;background:#e9ecee;}
           <td style="padding:8px 8px 8px 0;border-bottom:1px solid #EDF0F2;font-weight:500;">${srcTag}</td>
           <td style="padding:8px;border-bottom:1px solid #EDF0F2;color:#5A6066;">Source — system of record</td>
           <td style="padding:8px;border-bottom:1px solid #EDF0F2;">${fromAuth}</td>
-          <td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;"><span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:${clrClass};"></span>${gdpr || 'Confidential'}</span></td>
+          <td style="padding:8px 0 8px 8px;border-bottom:1px solid #EDF0F2;"><span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:${clrClass};display:inline-block;"></span>${gdpr || 'Confidential'}</span></td>
         </tr>
         <tr>
           <td style="padding:8px 8px 8px 0;font-weight:500;">${dstTag}</td>
           <td style="padding:8px;color:#5A6066;">Destination${destSaaS ? ' — SaaS platform' : ''}</td>
           <td style="padding:8px;">${toAuth}</td>
-          <td style="padding:8px 0 8px 8px;"><span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:${clrClass};"></span>${gdpr || 'Confidential'}</span></td>
+          <td style="padding:8px 0 8px 8px;"><span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:8px;height:8px;border-radius:50%;background:${clrClass};display:inline-block;"></span>${gdpr || 'Confidential'}</span></td>
         </tr>
       </tbody>
     </table>`
@@ -279,7 +246,7 @@ body{margin:0;background:#e9ecee;}
       </div>
       <div style="width:150px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 6px;">
         <div style="font-size:9px;color:#0084B2;font-family:'IBM Plex Mono',monospace;text-align:center;line-height:1.4;margin-bottom:3px;">${[protocol, pattern].filter(Boolean).join(' · ')}</div>
-        <svg width="120" height="16"><line x1="0" y1="8" x2="110" y2="8" stroke="#0084B2" stroke-width="1.5"/><polygon points="120,8 110,3 110,13" fill="#0084B2"/></svg>
+        <svg width="120" height="16" xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="8" x2="110" y2="8" stroke="#0084B2" stroke-width="1.5"/><polygon points="120,8 110,3 110,13" fill="#0084B2"/></svg>
         <div style="font-size:9px;color:#777;font-family:'IBM Plex Mono',monospace;text-align:center;line-height:1.4;margin-top:3px;">${[frequency, mode, trigger].filter(Boolean).join(' · ')}</div>
       </div>
       <div style="flex:1;border:${destSaaS ? '1px dashed #99a2a8' : '1px solid #E2E7EA'};border-left:4px solid ${clrClass};border-radius:2px;padding:12px 14px;background:#fff;">
@@ -291,11 +258,11 @@ body{margin:0;background:#e9ecee;}
     <div style="margin-top:16px;padding-top:13px;border-top:1px solid #E2E7EA;">
       <div style="font-size:9px;letter-spacing:.1em;color:#777;font-weight:600;margin-bottom:9px;">COLOUR-CODING KEY — DATA CLASSIFICATION</div>
       <div style="display:flex;flex-wrap:wrap;gap:8px 22px;font-size:11px;font-weight:300;">
-        <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#3E7C5A;border-radius:50%;flex:none;"></span><strong style="font-weight:500;">Public</strong></span>
-        <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#0084B2;border-radius:50%;flex:none;"></span><strong style="font-weight:500;">Internal</strong></span>
-        <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#C28A1E;border-radius:50%;flex:none;"></span><strong style="font-weight:500;">Customer Confidential</strong></span>
-        <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#B23A2E;border-radius:50%;flex:none;"></span><strong style="font-weight:500;">Restricted</strong></span>
-        <span style="display:flex;align-items:center;gap:7px;"><span style="width:16px;height:10px;border:1px dashed #99a2a8;flex:none;"></span>Third-party / SaaS endpoint</span>
+        <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#3E7C5A;border-radius:50%;flex:none;display:inline-block;"></span><strong style="font-weight:500;">Public</strong></span>
+        <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#0084B2;border-radius:50%;flex:none;display:inline-block;"></span><strong style="font-weight:500;">Internal</strong></span>
+        <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#C28A1E;border-radius:50%;flex:none;display:inline-block;"></span><strong style="font-weight:500;">Customer Confidential</strong></span>
+        <span style="display:flex;align-items:center;gap:7px;"><span style="width:10px;height:10px;background:#B23A2E;border-radius:50%;flex:none;display:inline-block;"></span><strong style="font-weight:500;">Restricted</strong></span>
+        <span style="display:flex;align-items:center;gap:7px;"><span style="width:16px;height:10px;border:1px dashed #99a2a8;flex:none;display:inline-block;"></span>Third-party / SaaS endpoint</span>
       </div>
     </div>`
   )}
@@ -388,17 +355,7 @@ body{margin:0;background:#e9ecee;}
     <span style="font-family:'IBM Plex Mono',monospace;">GLPI&nbsp;#${glpiId} · ${srcTag}&#8594;${dstTag}</span>
   </div>
 
-</div>
+</div>`;
 
-<script>
-  // Wait for IBM Plex fonts to load before printing
-  document.fonts.ready.then(() => window.print());
-</script>
-</body>
-</html>`;
-
-  const win = window.open('', '_blank');
-  if (!win) return; // blocked by popup blocker
-  win.document.write(html);
-  win.document.close();
+  await renderDivToPdf(divHtml, `ARIA_Dataflow_${glpiId || srcTag || 'document'}.pdf`);
 }

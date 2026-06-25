@@ -3225,8 +3225,77 @@ const AccessReview = ({ api }) => {
                           Audit
                         </Btn>
                       )}
+                      {app.glpiId && (
+                        <Btn variant="ghost" size="sm" icon="link"
+                          onClick={() => loadLinked(app.glpiId)}
+                          disabled={loadingLinked === app.glpiId}>
+                          {loadingLinked === app.glpiId ? 'Loading…' : expandedId === app.glpiId ? 'Hide' : 'Access'}
+                        </Btn>
+                      )}
                     </div>
                   </div>
+                  {expandedId === app.glpiId && (
+                    <div style={{ marginTop: 14, borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
+                      {!linkedCache[app.glpiId] ? (
+                        <div style={{ fontSize: 13, color: T.textMuted }}>Loading…</div>
+                      ) : linkedCache[app.glpiId].error ? (
+                        <div style={{ fontSize: 13, color: T.danger }}>{linkedCache[app.glpiId].error}</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                          <div>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                              Linked Users{linkedCache[app.glpiId].users.length > 0 ? ` (${linkedCache[app.glpiId].users.length})` : ''}
+                            </div>
+                            {linkedCache[app.glpiId].users.length === 0 ? (
+                              <div style={{ fontSize: 12, color: T.textDim }}>No users linked in GLPI</div>
+                            ) : (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                {linkedCache[app.glpiId].users.map((u, i) => (
+                                  <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 12, background: T.accentGlow, border: `1px solid ${T.accent}30`, fontSize: 12, color: T.text }}>
+                                    <Icon name="user" size={11} color={T.accent} />
+                                    {u.name || u.completename || u.login || `User #${u.id}`}
+                                    {u.role && <span style={{ color: T.textMuted }}>· {u.role}</span>}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                              Access-related Tickets{linkedCache[app.glpiId].tickets.length > 0 ? ` (${linkedCache[app.glpiId].tickets.length}${linkedCache[app.glpiId].ticketTotal !== linkedCache[app.glpiId].tickets.length ? ` of ${linkedCache[app.glpiId].ticketTotal}` : ''})` : ''}
+                            </div>
+                            {linkedCache[app.glpiId].tickets.length === 0 ? (
+                              <div style={{ fontSize: 12, color: T.textDim }}>
+                                No access-related tickets{linkedCache[app.glpiId].ticketTotal > 0 ? ` — ${linkedCache[app.glpiId].ticketTotal} other ticket${linkedCache[app.glpiId].ticketTotal !== 1 ? 's' : ''} exist` : ''}
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                {linkedCache[app.glpiId].tickets.map((t, i) => {
+                                  const ts = TICKET_STATUS[t.status] || { label: String(t.status), color: T.textDim };
+                                  return (
+                                    <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 10px', background: T.bgElevated, borderRadius: 6 }}>
+                                      <span style={{ flexShrink: 0, padding: '2px 7px', borderRadius: 10, background: ts.color + '22', color: ts.color, fontSize: 11, fontWeight: 600, marginTop: 1 }}>
+                                        {ts.label}
+                                      </span>
+                                      <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ fontSize: 12, color: T.text, fontWeight: 500 }}>{t.name || `Ticket #${t.id}`}</div>
+                                        {t.itilcategories_id && <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>{decodeHtml(String(t.itilcategories_id))}</div>}
+                                      </div>
+                                      {t.date_creation && (
+                                        <div style={{ flexShrink: 0, fontSize: 11, color: T.textDim }}>
+                                          {new Date(t.date_creation).toLocaleDateString()}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </Card>
               );
             })}
