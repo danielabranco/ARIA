@@ -2089,6 +2089,7 @@ router.get('/dataflow/:id/linked', async (req, res) => {
     let tickets = tRes.records.map(r => r.get('t'));
     let changes  = cRes.records.map(r => r.get('c'));
     let apps = [];
+    let history = [];
 
     const stubTickets = tickets.filter(t => !t.name);
     const stubChanges = changes.filter(c => !c.name);
@@ -2168,7 +2169,6 @@ router.get('/dataflow/:id/linked', async (req, res) => {
         const logRes = await fetch(`${base}/apirest.php/PluginDataflowsDataflow/${id}/Log?range=0-999`, {
           method: 'GET', headers: hdrs, agent,
         }).catch(() => null);
-        let history = [];
         if (logRes && logRes.ok) {
           const logBody = await logRes.json().catch(() => []);
           if (Array.isArray(logBody)) {
