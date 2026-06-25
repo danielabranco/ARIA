@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { generateKnowledgePDF } from "./kbPdf";
 import { generateDataflowPDF } from "./dataflowPdf";
+import { generateApplicationPDF } from "./applicationPdf";
 
 // ── LIGHTWEIGHT MARKDOWN RENDERER ────────────────────────────────────────────
 // Handles: ## h2, ### h3, > blockquote, | tables |, blank-line paragraphs
@@ -653,7 +654,7 @@ const KnowledgeDetailPanel = ({ entry, api, onClose, CAT_COLORS }) => {
             <h2 style={{ fontSize: 17, fontWeight: 700, color: T.text, lineHeight: 1.3, margin: 0 }}>{entry.topic}</h2>
           </div>
           <div style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 16, flexShrink: 0 }}>
-            <Btn size="sm" variant="secondary" icon="download" onClick={() => isDataflow ? generateDataflowPDF(entry) : generateKnowledgePDF(entry)}>Download PDF</Btn>
+            <Btn size="sm" variant="secondary" icon="download" onClick={() => isDataflow ? generateDataflowPDF(entry) : entry.category === 'application' ? generateApplicationPDF(entry, glpiData) : generateKnowledgePDF(entry)}>Download PDF</Btn>
             <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: T.textMuted, padding: 4, display: "flex", borderRadius: 6 }}>
               <Icon name="close" size={18} color={T.textMuted} />
             </button>
