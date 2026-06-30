@@ -1715,22 +1715,11 @@ const ArchitectureMap = ({ api }) => {
         if (activeAppNames.has(dst.name)) visibleAppNames.add(src.name);
       }
     } else if (activeAppNames && activeAppNames.size > 1) {
-      // Multi-app: bridge expansion — add nodes that connect to 2+ selected apps
-      const neighborToSelectedApps = {};
-      for (const { src, dst } of Object.values(allDfGroups)) {
-        const srcSel = activeAppNames.has(src.name), dstSel = activeAppNames.has(dst.name);
-        if (srcSel && !dstSel) {
-          if (!neighborToSelectedApps[dst.name]) neighborToSelectedApps[dst.name] = new Set();
-          neighborToSelectedApps[dst.name].add(src.name);
-        }
-        if (dstSel && !srcSel) {
-          if (!neighborToSelectedApps[src.name]) neighborToSelectedApps[src.name] = new Set();
-          neighborToSelectedApps[src.name].add(dst.name);
-        }
-      }
+      // Multi-app: union of all neighbors of all selected apps
       visibleAppNames = new Set(activeAppNames);
-      for (const [name, connectedTo] of Object.entries(neighborToSelectedApps)) {
-        if (connectedTo.size >= 2) visibleAppNames.add(name);
+      for (const { src, dst } of Object.values(allDfGroups)) {
+        if (activeAppNames.has(src.name)) visibleAppNames.add(dst.name);
+        if (activeAppNames.has(dst.name)) visibleAppNames.add(src.name);
       }
     }
 
