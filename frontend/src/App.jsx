@@ -529,11 +529,8 @@ const Dashboard = ({ api, setPage }) => {
               stats={stats.compliance.dataflows}
               breakdown={compliance?.dataflows}
               fieldSections={[
-                { key: "byField",     label: "By Criterion" },
-                { key: "byStatus",    label: "By Status" },
-                { key: "byFlowGroup", label: "By Flow Group" },
-                { key: "byProtocol",  label: "By Protocol" },
-                { key: "byComplexity",label: "By Type" },
+                { key: "byField",  label: "By Criterion" },
+                { key: "byStatus", label: "By Status" },
               ]}
             />
             <CompliancePanel
@@ -543,10 +540,9 @@ const Dashboard = ({ api, setPage }) => {
               stats={stats.compliance.applications}
               breakdown={compliance?.applications}
               fieldSections={[
-                { key: "byField",  label: "By Criterion" },
-                { key: "byType",   label: "By Type" },
-                { key: "byEntity", label: "By Entity" },
-                { key: "byStatus", label: "By Status" },
+                { key: "byField",   label: "By Criterion" },
+                { key: "byType",    label: "By Type" },
+                { key: "byTargets", label: "By McFarlan Matrix" },
               ]}
             />
           </div>
@@ -1709,12 +1705,18 @@ const ArchitectureMap = ({ api }) => {
       allDfGroups[key].dfIds.push(df.id);
     }
 
-    // Bridge expansion for multi-app filter
-    // Track which DISTINCT selected apps each neighbor connects to (not raw edge count)
-    // so bidirectional edges to the same selected app don't double-count
+    // Expand visibleAppNames to include reachable neighbors
     let visibleAppNames = activeAppNames;
-    if (activeAppNames && activeAppNames.size > 1) {
-      const neighborToSelectedApps = {}; // neighborName → Set of selected app names it connects to
+    if (activeAppNames && activeAppNames.size === 1) {
+      // Single focus: show focused app + all direct neighbors
+      visibleAppNames = new Set(activeAppNames);
+      for (const { src, dst } of Object.values(allDfGroups)) {
+        if (activeAppNames.has(src.name)) visibleAppNames.add(dst.name);
+        if (activeAppNames.has(dst.name)) visibleAppNames.add(src.name);
+      }
+    } else if (activeAppNames && activeAppNames.size > 1) {
+      // Multi-app: bridge expansion — add nodes that connect to 2+ selected apps
+      const neighborToSelectedApps = {};
       for (const { src, dst } of Object.values(allDfGroups)) {
         const srcSel = activeAppNames.has(src.name), dstSel = activeAppNames.has(dst.name);
         if (srcSel && !dstSel) {
@@ -1728,7 +1730,7 @@ const ArchitectureMap = ({ api }) => {
       }
       visibleAppNames = new Set(activeAppNames);
       for (const [name, connectedTo] of Object.entries(neighborToSelectedApps)) {
-        if (connectedTo.size >= 2) visibleAppNames.add(name); // only true bridges
+        if (connectedTo.size >= 2) visibleAppNames.add(name);
       }
     }
 
@@ -2994,6 +2996,8 @@ const AccessReview = ({ api }) => {
   const [expandedId,    setExpandedId]    = useState(null);
   const [linkedCache,   setLinkedCache]   = useState({});
   const [loadingLinked, setLoadingLinked] = useState(null);
+  const [glpiUrl,       setGlpiUrl]       = useState('');
+  const [selectedUser,  setSelectedUser]  = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -3007,6 +3011,7 @@ const AccessReview = ({ api }) => {
       setApps(Array.isArray(appData) ? appData : []);
       setUsers(Array.isArray(userData) ? userData : []);
       setGroups(Array.isArray(groupData) ? groupData : []);
+      api.get('/api/pipeline/config').then(d => { if (d?.config?.glpiUrl) setGlpiUrl(d.config.glpiUrl.replace(/\/$/, '')); }).catch(() => {});
     } catch (e) { setError(e.message); }
     setLoading(false);
   };
@@ -3028,22 +3033,17 @@ const AccessReview = ({ api }) => {
   const ACCESS_KW = ['access', 'accès', 'account', 'compte', 'user', 'utilisateur', 'permission', 'rights', 'droits', 'credential', 'password', 'mot de passe', 'login', 'connexion', 'role', 'profil', 'profile', 'authoriz', 'autoris', 'privilege', 'habilitation', 'identif'];
 
   const loadLinked = async (glpiId) => {
-    if (expandedId === glpiId && !linkedCache[glpiId]?.error) { setExpandedId(null); return; }
-    setExpandedId(glpiId);
+    if (expandedId === glpiId && !linkedCache[glpiId]?.error) { setExpandedId(null); setSelectedUser(null); return; }
+    setExpandedId(glpiId); setSelectedUser(null);
     if (linkedCache[glpiId] && !linkedCache[glpiId].error) return;
     setLoadingLinked(glpiId);
     try {
-      const d = await api.get(`/api/pipeline/app/${encodeURIComponent(glpiId)}/linked`);
-      const isAccessTicket = t => {
-        const text = ((t.name || '') + ' ' + (t.itilcategories_id || '')).toLowerCase();
-        return ACCESS_KW.some(kw => text.includes(kw));
-      };
+      const d = await api.get(`/api/useraccess/app/${encodeURIComponent(glpiId)}/linked`);
       setLinkedCache(prev => ({
         ...prev,
         [glpiId]: {
-          users:      d.users   || [],
-          tickets:    (d.tickets || []).filter(isAccessTicket),
-          ticketTotal: (d.tickets || []).length,
+          users:   d.users   || [],
+          tickets: d.tickets || [],
         }
       }));
     } catch (e) { setLinkedCache(prev => ({ ...prev, [glpiId]: { error: e.message } })); }
@@ -3054,6 +3054,9 @@ const AccessReview = ({ api }) => {
 
   // Strip "Application #ID — " prefix from topic to get a clean display name
   const appName = topic => (topic || '').replace(/^Application\s*#\d+\s*[—\-]\s*/i, '').trim() || topic || '—';
+
+  const userById = Object.fromEntries(users.map(u => [String(u.glpiId), u]));
+  const resolveUserName = (linkedUser) => userById[String(linkedUser.id)]?.name || linkedUser.name || `User #${linkedUser.id}`;
 
   const sl = search.toLowerCase();
   const filteredApps = apps.filter(a => {
@@ -3241,61 +3244,117 @@ const AccessReview = ({ api }) => {
                       {!linkedCache[app.glpiId] ? (
                         <div style={{ fontSize: 13, color: T.textMuted }}>Loading…</div>
                       ) : linkedCache[app.glpiId].error ? (
-                        <div style={{ fontSize: 13, color: T.danger }}>{linkedCache[app.glpiId].error}</div>
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                          <div>
-                            <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                              Linked Users{linkedCache[app.glpiId].users.length > 0 ? ` (${linkedCache[app.glpiId].users.length})` : ''}
-                            </div>
-                            {linkedCache[app.glpiId].users.length === 0 ? (
-                              <div style={{ fontSize: 12, color: T.textDim }}>No users linked in GLPI</div>
-                            ) : (
-                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                {linkedCache[app.glpiId].users.map((u, i) => (
-                                  <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 12, background: T.accentGlow, border: `1px solid ${T.accent}30`, fontSize: 12, color: T.text }}>
-                                    <Icon name="user" size={11} color={T.accent} />
-                                    {u.name || u.completename || u.login || `User #${u.id}`}
-                                    {u.role && <span style={{ color: T.textMuted }}>· {u.role}</span>}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
-                              Access-related Tickets{linkedCache[app.glpiId].tickets.length > 0 ? ` (${linkedCache[app.glpiId].tickets.length}${linkedCache[app.glpiId].ticketTotal !== linkedCache[app.glpiId].tickets.length ? ` of ${linkedCache[app.glpiId].ticketTotal}` : ''})` : ''}
-                            </div>
-                            {linkedCache[app.glpiId].tickets.length === 0 ? (
-                              <div style={{ fontSize: 12, color: T.textDim }}>
-                                No access-related tickets{linkedCache[app.glpiId].ticketTotal > 0 ? ` — ${linkedCache[app.glpiId].ticketTotal} other ticket${linkedCache[app.glpiId].ticketTotal !== 1 ? 's' : ''} exist` : ''}
-                              </div>
-                            ) : (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                                {linkedCache[app.glpiId].tickets.map((t, i) => {
-                                  const ts = TICKET_STATUS[t.status] || { label: String(t.status), color: T.textDim };
-                                  return (
-                                    <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 10px', background: T.bgElevated, borderRadius: 6 }}>
-                                      <span style={{ flexShrink: 0, padding: '2px 7px', borderRadius: 10, background: ts.color + '22', color: ts.color, fontSize: 11, fontWeight: 600, marginTop: 1 }}>
-                                        {ts.label}
-                                      </span>
-                                      <div style={{ flex: 1, minWidth: 0 }}>
-                                        <div style={{ fontSize: 12, color: T.text, fontWeight: 500 }}>{t.name || `Ticket #${t.id}`}</div>
-                                        {t.itilcategories_id && <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>{decodeHtml(String(t.itilcategories_id))}</div>}
-                                      </div>
-                                      {t.date_creation && (
-                                        <div style={{ flexShrink: 0, fontSize: 11, color: T.textDim }}>
-                                          {new Date(t.date_creation).toLocaleDateString()}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
+                        <div style={{ fontSize: 13, color: T.danger, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Icon name="warning" size={13} color={T.danger} />
+                          {linkedCache[app.glpiId].error} — click Access again to retry
                         </div>
-                      )}
+                      ) : (() => {
+                        const ld = linkedCache[app.glpiId];
+                        const selUserObj  = selectedUser ? ld.users.find(u => String(u.id) === String(selectedUser)) : null;
+                        const selFullName = selectedUser ? (userById[String(selectedUser)]?.name || '') : '';
+                        const selLogin    = selUserObj?.name || '';
+                        // Split CamelCase login ("TellerAl" → ["Teller"]) — first part is usually the surname
+                        const loginSurname = (selLogin.match(/^[A-Z][a-z]+/) || [])[0] || '';
+                        const selUserName = selFullName || selLogin || (selectedUser ? String(selectedUser) : null);
+                        const visibleTickets = selectedUser
+                          ? ld.tickets.filter(t => {
+                              const hay = (t.name || '').toLowerCase();
+                              if (selFullName && hay.includes(selFullName.toLowerCase())) return true;
+                              if (selLogin    && hay.includes(selLogin.toLowerCase()))    return true;
+                              return loginSurname.length > 3 && hay.includes(loginSurname.toLowerCase());
+                            })
+                          : ld.tickets;
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                                Linked Users{ld.users.length > 0 ? ` (${ld.users.length})` : ''}
+                                {selectedUser && (
+                                  <span onClick={() => setSelectedUser(null)} style={{ marginLeft: 8, fontSize: 10, color: T.accent, cursor: 'pointer', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
+                                    ✕ clear filter
+                                  </span>
+                                )}
+                              </div>
+                              {ld.users.length === 0 ? (
+                                <div style={{ fontSize: 12, color: T.textDim }}>No users linked in GLPI</div>
+                              ) : (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                  {ld.users.map((u, i) => {
+                                    const displayName = resolveUserName(u);
+                                    const isSelected = selectedUser === u.id;
+                                    return (
+                                      <span key={i} onClick={() => setSelectedUser(isSelected ? null : u.id)}
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 12, cursor: 'pointer', userSelect: 'none', fontSize: 12, color: isSelected ? T.bg : T.text, background: isSelected ? T.accent : T.accentGlow, border: `1px solid ${isSelected ? T.accent : T.accent + '30'}`, transition: 'all 0.15s' }}>
+                                        <Icon name="user" size={11} color={isSelected ? T.bg : T.accent} />
+                                        {displayName}
+                                        {u.role && <span style={{ color: isSelected ? T.bg + 'cc' : T.textMuted }}>· {u.role}</span>}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: T.textMuted, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+                                {selectedUser ? `Tickets mentioning ${selUserName}` : 'Access-related Tickets'}
+                                {visibleTickets.length > 0 && ` (${visibleTickets.length})`}
+                              </div>
+                              {visibleTickets.length === 0 ? (
+                                <div style={{ fontSize: 12, color: T.textDim }}>
+                                  {selectedUser ? `No access tickets mention "${selUserName}"` : 'No "User account and Access" tickets found'}
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                  {visibleTickets.map((t, i) => {
+                                    const ts = TICKET_STATUS[t.status] || { label: String(t.status), color: T.textDim };
+                                    const ticketUrl = glpiUrl ? `${glpiUrl}/front/ticket.form.php?id=${t.id}` : null;
+                                    const hay = (t.name || '').toLowerCase();
+                                    const matchedUser = ld.users.find(u => {
+                                      const full    = (userById[String(u.id)]?.name || '').toLowerCase();
+                                      const login   = (u.name || '').toLowerCase();
+                                      const surname = ((u.name || '').match(/^[A-Z][a-z]+/) || [])[0]?.toLowerCase() || '';
+                                      return (full && hay.includes(full)) ||
+                                             (login && hay.includes(login)) ||
+                                             (surname.length > 3 && hay.includes(surname));
+                                    });
+                                    return (
+                                      <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 10px', background: T.bgElevated, borderRadius: 6 }}>
+                                        <span style={{ flexShrink: 0, padding: '2px 7px', borderRadius: 10, background: ts.color + '22', color: ts.color, fontSize: 11, fontWeight: 600, marginTop: 1 }}>
+                                          {ts.label}
+                                        </span>
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                          {ticketUrl ? (
+                                            <a href={ticketUrl} target="_blank" rel="noopener noreferrer"
+                                              style={{ fontSize: 12, color: T.accent, fontWeight: 500, textDecoration: 'none' }}
+                                              onMouseEnter={e => e.target.style.textDecoration = 'underline'}
+                                              onMouseLeave={e => e.target.style.textDecoration = 'none'}>
+                                              {decodeHtml(t.name || `Ticket #${t.id}`)}
+                                            </a>
+                                          ) : (
+                                            <div style={{ fontSize: 12, color: T.text, fontWeight: 500 }}>{decodeHtml(t.name || `Ticket #${t.id}`)}</div>
+                                          )}
+                                          {t.itilcategories_id && <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>{decodeHtml(String(t.itilcategories_id))}</div>}
+                                          {matchedUser && (
+                                            <div style={{ marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', borderRadius: 10, background: T.accentGlow, border: `1px solid ${T.accent}30`, fontSize: 11, color: T.accent }}>
+                                              <Icon name="user" size={10} color={T.accent} />
+                                              {resolveUserName(matchedUser)}
+                                            </div>
+                                          )}
+                                        </div>
+                                        {(t.date || t.date_mod) && (
+                                          <div style={{ flexShrink: 0, fontSize: 11, color: T.textDim }}>
+                                            {new Date(t.date || t.date_mod).toLocaleDateString()}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </Card>
