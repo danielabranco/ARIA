@@ -773,7 +773,7 @@ async function runAppStructures(ctx) {
            a.status = $status, a.statusDate = $statusDate, a.devLanguage = $devLang,
            a.inUseSince = $inUseSince, a.dataClassification = $dataClass,
            a.repo = $repo, a.healthCheck = $healthCheck, a.version = $version,
-           a.compliant = $compliant, a.updatedAt = $now`,
+           a.compliant = $compliant, a.source = 'glpi', a.updatedAt = $now`,
       {
         name: appName, id: appId, type: appType, entity: appEntity,
         desc: appDesc, comment: appComment, status: appStatus, statusDate: appStatusDate,
@@ -1447,12 +1447,12 @@ async function runDataflows(ctx) {
 
     // Relationships — mirrors sync.js exactly
     if (src) await s.run(
-      `MERGE (a:Application { name: $name }) SET a.updatedAt = $now
+      `MERGE (a:Application { name: $name }) SET a.source = 'glpi', a.updatedAt = $now
        WITH a MATCH (d:Dataflow { glpiId: $dfId }) MERGE (a)-[:FEEDS_INTO]->(d)`,
       { name: src, dfId, now }
     ).catch(() => {});
     if (dst) await s.run(
-      `MERGE (a:Application { name: $name }) SET a.updatedAt = $now
+      `MERGE (a:Application { name: $name }) SET a.source = 'glpi', a.updatedAt = $now
        WITH a MATCH (d:Dataflow { glpiId: $dfId }) MERGE (d)-[:FEEDS_INTO]->(a)`,
       { name: dst, dfId, now }
     ).catch(() => {});
@@ -1758,25 +1758,36 @@ async function runAppITSMLinks(ctx) {
 async function runAppAssociatedItems(ctx) {
   const { baseUrl, sessionToken, appToken, s } = ctx;
 
-  const items = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent_Item', sessionToken, appToken);
+  // expand_dropdowns gives us the display name in items_id and role in the role field;
+  // the raw GLPI ID is still available via the item's links array.
+  const items = await fetchAllPages(baseUrl, 'PluginArchiswSwcomponent_Item?expand_dropdowns=true', sessionToken, appToken);
 
   const byApp = {};
   for (const row of items) {
-    const appId = String(row.plugin_archisw_swcomponents_id);
+    // With expand_dropdowns, plugin_archisw_swcomponents_id is now the app name string.
+    // Use the first link with rel=PluginArchiswSwcomponent to get the raw numeric app ID.
+    const appLink = (row.links || []).find(l => l.rel === 'PluginArchiswSwcomponent');
+    const appId = appLink?.href?.match(/\/(\d+)$/)?.[1] || String(row.plugin_archisw_swcomponents_id);
     (byApp[appId] ??= []).push(row);
   }
 
   let count = 0;
   for (const [appId, appItems] of Object.entries(byApp)) {
     for (const item of appItems) {
-      if (!item.items_id || !item.itemtype) continue;
+      if (!item.itemtype) continue;
+      // Extract raw item ID from links (expand_dropdowns replaces items_id with display text for some types)
+      const itemLink = (item.links || []).find(l => l.rel === item.itemtype);
+      const itemId = itemLink?.href?.match(/\/(\d+)$/)?.[1] || String(item.items_id || '');
+      if (!itemId) continue;
+      const role = String(item.plugin_archisw_swcomponents_itemroles_id || '');
+      const name = item.itemtype === 'User' ? String(item.items_id || '') : '';
       try {
         await s.run(
           `MATCH (a:Application { glpiId: $appId })
            MERGE (i:GlpiItem { glpiId: $itemId, itemtype: $itemtype })
-           ON CREATE SET i.updatedAt = $now
+           SET i.updatedAt = $now${name ? ', i.name = $name' : ''}${role ? ', i.role = $role' : ''}
            MERGE (a)-[:ASSOCIATED_WITH]->(i)`,
-          { appId, itemId: String(item.items_id), itemtype: item.itemtype, now: new Date().toISOString() }
+          { appId, itemId, itemtype: item.itemtype, now: new Date().toISOString(), name, role }
         );
         count++;
       } catch {}
@@ -2228,8 +2239,9 @@ router.get('/app/:id/linked', async (req, res) => {
       const base  = cfg.glpiUrl.replace(/\/$/, '');
       const agent = base.startsWith('https') ? httpsAgent : undefined;
       enforceGetOnly('GET');
-      const sessRes  = await fetch(`${base}/apirest.php/initSession`, { method: 'GET', headers: { 'Authorization': `user_token ${cfg.glpiUserToken}`, 'App-Token': cfg.glpiAppToken }, agent });
-      if (sessRes.ok) {
+      let sessRes;
+      try { sessRes = await fetch(`${base}/apirest.php/initSession`, { method: 'GET', headers: { 'Authorization': `user_token ${cfg.glpiUserToken}`, 'App-Token': cfg.glpiAppToken }, agent, signal: AbortSignal.timeout(12000) }); } catch { sessRes = null; }
+      if (sessRes && sessRes.ok) {
         const { session_token: token } = await sessRes.json();
         const hdrs = { 'Session-Token': token, 'App-Token': cfg.glpiAppToken, 'Content-Type': 'application/json' };
 
@@ -2284,7 +2296,7 @@ router.get('/app/:id/linked', async (req, res) => {
     });
 
     res.json({ tickets: tickets.map(mapTicket), changes: changes.map(mapChange), dataflows, associatedItems, users });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { if (!res.headersSent) res.status(500).json({ error: e.message }); }
   finally { await s.close(); }
 });
 
